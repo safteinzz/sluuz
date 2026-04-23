@@ -3,7 +3,8 @@ name = "sluuz"
 version = "0.1.0"
 edition = "2021"
 description = "CLI tools for searching and managing git repositories"
-license = "GPL-3.0-only"
+license = "AGPL-3.0-only"
+repository = "https://gitlab.com/safteinzz/sluuz"
 
 # The compiled binary will be called `gt`
 [[bin]]
