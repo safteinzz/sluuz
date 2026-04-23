@@ -1,0 +1,17 @@
+[package]
+name = "sluuz"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tools for searching and managing git repositories"
+license = "GPL-3.0-only"
+
+# The compiled binary will be called `gt`
+[[bin]]
+name = "sluuz"
+path = "src/main.rs"
+
+[dependencies]
+clap    = { version = "4", features = ["derive"] } # CLI argument parsing
+colored = "2"                                       # terminal colors
+rayon   = "1"                                       # parallel iterators
+walkdir = "2"                                       # recursive directory walking
