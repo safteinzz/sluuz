@@ -15,3 +15,11 @@ pub fn find_repos(base: &Path, max_depth: usize) -> Vec<PathBuf> {
         .filter_map(|entry| entry.path().parent().map(Path::to_path_buf))       // .git → repo root
         .collect()
 }
+
+/// Get a human-readable repo name from its path (its directory name).
+pub fn display_name(repo: &Path) -> String {
+    repo.canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| repo.to_string_lossy().into_owned())
+}

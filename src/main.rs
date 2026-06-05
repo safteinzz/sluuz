@@ -6,6 +6,7 @@
 
 mod commands;
 mod git;
+mod history;
 
 use clap::{Parser, Subcommand};
 
