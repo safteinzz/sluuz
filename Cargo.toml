@@ -1,6 +1,6 @@
 [package]
 name = "sluuz"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "CLI tools for searching and managing git repositories"
 license = "AGPL-3.0-only"
