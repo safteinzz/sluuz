@@ -1,11 +1,11 @@
-//! gt — git-tools CLI
+//! sluuz — git search and multi-repo management CLI
 //!
 //! Subcommands:
-//!   gt search <pattern>   Search git history for commits that added/removed a string
-//!   gt scan   [path]      Scan repositories for leaked secrets / sensitive terms
-//!   gt status [path]      Show working-tree state across all repos under a path
-//!   gt fetch  [path]      Fetch (and optionally fast-forward) all repos in parallel
-//!   gt branches [path]    Find merged, deletable branches across all repos
+//!   sluuz search <pattern>   Search git history for commits that added/removed a string
+//!   sluuz scan   [path]      Scan repositories for leaked secrets / sensitive terms
+//!   sluuz status [path]      Show working-tree state across all repos under a path
+//!   sluuz fetch  [path]      Fetch (and optionally fast-forward) all repos in parallel
+//!   sluuz branches [path]    Find merged, deletable branches across all repos
 
 mod commands;
 mod git;
@@ -13,9 +13,25 @@ mod history;
 
 use clap::{Parser, Subcommand};
 
+/// Shown at the bottom of `sluuz --help` so the common invocations are visible
+/// without digging into each subcommand's help.
+const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
+  sluuz search -r api_key        Find a string across every repo, all branches
+  sluuz scan -t aws,token        Audit repos for custom secret terms
+  sluuz status --dirty           Show only repos with uncommitted/unpushed work
+  sluuz fetch --pull             Fetch all repos and fast-forward where safe
+  sluuz branches                 List merged branches that are safe to delete
+
+Run `sluuz <command> --help` for options specific to a command.";
+
 // `derive` lets clap generate all the argument parsing boilerplate from annotations.
 #[derive(Parser)]
-#[command(name = "gt", version, about = "Git search and management tools")]
+#[command(
+    name = "sluuz",
+    version,
+    about = "Git search and multi-repo management tools",
+    after_help = EXAMPLES
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
