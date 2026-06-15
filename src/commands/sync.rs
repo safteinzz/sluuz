@@ -1,4 +1,4 @@
-//! `gt fetch` — fetch (and optionally fast-forward) every repo under a path in
+//! `slu sync` — fetch (and optionally fast-forward) every repo under a path in
 //! parallel.
 //!
 //! By default it only fetches + prunes, which never touches your working tree.

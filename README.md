@@ -1,10 +1,14 @@
 # sluuz
 
-Fast, colorized CLI for searching git history and managing many git repos at once.
+**git, but it sleuths.** 🕵️
 
-`sluuz` walks every repository under a directory and works across **all branches**
-in parallel — so you can hunt a string through history, audit for leaked secrets,
-or check the state of 30 repos with a single command.
+`sluuz` is a drop-in **git superset**. The command you type is the short `slu`,
+and every git command still works exactly as before — `slu commit`, `slu push`,
+`slu log` all pass straight through to git. On top of that you get superpowers a
+shell alias could never give you: pickaxe a string through every branch of every
+repo at once, audit history for leaked secrets, and manage many repos in one go.
+
+The name? It's for people who like **sleuthing** through git history.
 
 ## Install
 
@@ -12,80 +16,97 @@ or check the state of 30 repos with a single command.
 cargo install sluuz
 ```
 
-Update to the latest version:
+This installs a single command: **`slu`** — three letters, same length as `git`
+itself. Update later with `cargo install sluuz --force`.
+
+## It's just git… until it isn't
+
+Anything git understands is forwarded verbatim, with your editor, pager, prompts,
+colors, and exit codes intact:
 
 ```bash
-cargo install sluuz --force
+slu commit -m "fix"
+slu push
+slu rebase -i HEAD~3
+slu log --oneline
 ```
 
-## Commands
+Then come the superpowers.
 
-### `search` — find where a string entered or left history
+### `slu search` — sleuth a string through history
 
 Uses git's pickaxe (`git log -S`) across all branches, then shows the matching
 commit, the **file(s)** the change touched, and the **branches** that contain it.
-Because it's pickaxe-based, it also finds matches inside binary/encrypted blobs.
+Being pickaxe-based, it even finds matches inside binary/encrypted blobs.
 
 ```bash
-sluuz search "api_key"             # this repo, all branches
-sluuz search -r "password"         # recurse into every repo under the current dir
-sluuz search -r -l 50 "secret"     # show up to 50 commits per repo (default 20)
+slu search "api_key"             # this repo, all branches
+slu search -r "password"         # recurse into every repo under the current dir
+slu search -r -l 50 "secret"     # up to 50 commits per repo (default 20)
 ```
 
 Matching is case-sensitive (pickaxe is precise by nature).
 
-### `scan` — audit repos for leaked secrets
+### `slu scan` — audit repos for leaked secrets
 
 Sweeps every commit on every branch for a list of sensitive terms
-(case-insensitive) and reports each hit with its commit, branch, and file.
-Catches secrets committed in binary/encrypted files too.
+(case-insensitive) and reports each hit with its commit, branch, and file —
+including secrets committed in binary/encrypted files.
 
 ```bash
-sluuz scan                              # scan repos under the current dir
-sluuz scan /path/to/projects            # scan a specific path
-sluuz scan -t "aws,bearer,token"        # custom terms (default: password,secret,token,…)
-sluuz scan -d 5                         # search up to 5 directory levels deep
+slu scan                              # scan repos under the current dir
+slu scan /path/to/projects            # a specific path
+slu scan -t "aws,bearer,token"        # custom terms (default: password,secret,token,…)
 ```
 
-### `status` — working-tree state across all repos
+### `slu repos` — state of every repo at a glance
 
-A dashboard of every repo under a path: current branch, uncommitted files,
-and how far ahead/behind its upstream it is.
+A dashboard of every repo under a path: current branch, uncommitted files, and
+how far ahead/behind its upstream it is.
 
 ```bash
-sluuz status                # all repos under the current dir
-sluuz status --dirty        # only repos needing attention
+slu repos                # all repos under the current dir
+slu repos --dirty        # only repos needing attention
 ```
 
 Legend: `✚` uncommitted · `↑` unpushed commits · `↓` unpulled commits
 
-### `fetch` — fetch (and optionally fast-forward) every repo
+### `slu sync` — fetch (and optionally fast-forward) every repo
 
-Fetches and prunes all repos in parallel. With `--pull` it additionally runs
+Fetches and prunes all repos in parallel. With `--pull` it also runs
 `git pull --ff-only`, which fast-forwards safely and refuses rather than merging
 when it can't — so it never creates merge commits or conflicts.
 
 ```bash
-sluuz fetch                 # fetch + prune all repos
-sluuz fetch --pull          # also fast-forward the current branch where safe
+slu sync                 # fetch + prune all repos
+slu sync --pull          # also fast-forward the current branch where safe
 ```
 
-### `branches` — find merged, deletable branches
+### `slu tidy` — find merged, deletable branches
 
 Lists local branches already merged into your current branch (safe to delete),
 with how long since each was last touched and a ready-to-paste delete command.
 
 ```bash
-sluuz branches              # repos with cleanup to do
-sluuz branches --all        # include repos with nothing to clean up
+slu tidy                 # repos with cleanup to do
+slu tidy --all           # include repos with nothing to clean up
+```
+
+### `slu each` — run any git command across all repos
+
+The catch-all multi-repo power tool: whatever you'd type after `git`, run it in
+every repo under you, in parallel.
+
+```bash
+slu each pull --ff-only
+slu each switch main
+slu each "log --oneline -1"
 ```
 
 ## Common options
 
-Most commands accept:
-
-- a `path` argument (defaults to `.`)
-- `-d, --depth <N>` — how many directory levels deep to look for repos (default 3)
+The multi-repo commands accept a `path` argument (defaults to `.`) and
+`-d, --depth <N>` — how many directory levels deep to look for repos (default 3).
 
 ## License
 

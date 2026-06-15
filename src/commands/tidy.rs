@@ -1,4 +1,4 @@
-//! `gt branches` — find local branches that are already merged (safe to delete)
+//! `slu tidy` — find local branches that are already merged (safe to delete)
 //! across every repo under a path, with how long since each was last touched.
 //!
 //! "Merged" means merged into the current branch (`git branch --merged`), so

@@ -1,36 +1,43 @@
-//! sluuz — git search and multi-repo management CLI
+//! sluuz — a git superset. Binary: `slu`.
 //!
-//! Subcommands:
-//!   sluuz search <pattern>   Search git history for commits that added/removed a string
-//!   sluuz scan   [path]      Scan repositories for leaked secrets / sensitive terms
-//!   sluuz status [path]      Show working-tree state across all repos under a path
-//!   sluuz fetch  [path]      Fetch (and optionally fast-forward) all repos in parallel
-//!   sluuz branches [path]    Find merged, deletable branches across all repos
+//! Every git command passes straight through (`slu commit`, `slu push`, `slu
+//! log`), and these extra verbs add cross-repo / history superpowers:
+//!   slu search <pattern>   Pickaxe a string through all branches/repos
+//!   slu scan   [path]      Audit repositories for leaked secrets
+//!   slu repos  [path]      Working-tree state across all repos under a path
+//!   slu sync   [path]      Fetch (and optionally fast-forward) all repos
+//!   slu tidy   [path]      Find merged, deletable branches across all repos
+//!   slu each   <git args>  Run any git command in every repo
 
 mod commands;
 mod git;
 mod history;
 
 use clap::{Parser, Subcommand};
+use std::process::Command;
 
-/// Shown at the bottom of `sluuz --help` so the common invocations are visible
+/// Shown at the bottom of `slu --help` so the common invocations are visible
 /// without digging into each subcommand's help.
 const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
-  sluuz search -r api_key        Find a string across every repo, all branches
-  sluuz scan -t aws,token        Audit repos for custom secret terms
-  sluuz status --dirty           Show only repos with uncommitted/unpushed work
-  sluuz fetch --pull             Fetch all repos and fast-forward where safe
-  sluuz branches                 List merged branches that are safe to delete
+  slu commit -m \"fix\"       Plain git — passed straight through
+  slu push                   …so are push, log, rebase, diff, everything
+  slu search -r api_key      Sleuth a string across every repo, all branches
+  slu scan -t aws,token      Audit repos for custom secret terms
+  slu repos --dirty          Show only repos with uncommitted/unpushed work
+  slu sync --pull            Fetch all repos and fast-forward where safe
+  slu tidy                   List merged branches that are safe to delete
+  slu each pull --ff-only    Run any git command in every repo
 
-Run `sluuz <command> --help` for options specific to a command.";
+Run `slu <command> --help` for options specific to a superpower command.";
 
 // `derive` lets clap generate all the argument parsing boilerplate from annotations.
 #[derive(Parser)]
 #[command(
-    name = "sluuz",
+    name = "slu",
     version,
-    about = "Git search and multi-repo management tools",
-    after_help = EXAMPLES
+    about = "git, but it sleuths — a git superset with cross-repo & history superpowers",
+    after_help = EXAMPLES,
+    arg_required_else_help = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -45,11 +52,16 @@ enum Cmd {
     /// Scan repositories for sensitive terms (passwords, secrets, tokens)
     Scan(commands::scan::Args),
     /// Show working-tree state (branch, dirty, ahead/behind) across all repos
-    Status(commands::status::Args),
+    Repos(commands::repos::Args),
     /// Fetch (and optionally fast-forward) all repos under a path in parallel
-    Fetch(commands::fetch::Args),
+    Sync(commands::sync::Args),
     /// Find merged, safe-to-delete branches across all repos
-    Branches(commands::branches::Args),
+    Tidy(commands::tidy::Args),
+    /// Run any git command in every repo under the current directory
+    Each(commands::each::Args),
+    /// Any other command is passed straight through to git
+    #[command(external_subcommand)]
+    Git(Vec<String>),
 }
 
 fn main() {
@@ -58,8 +70,22 @@ fn main() {
     match cli.command {
         Cmd::Search(args) => commands::search::run(args),
         Cmd::Scan(args) => commands::scan::run(args),
-        Cmd::Status(args) => commands::status::run(args),
-        Cmd::Fetch(args) => commands::fetch::run(args),
-        Cmd::Branches(args) => commands::branches::run(args),
+        Cmd::Repos(args) => commands::repos::run(args),
+        Cmd::Sync(args) => commands::sync::run(args),
+        Cmd::Tidy(args) => commands::tidy::run(args),
+        Cmd::Each(args) => commands::each::run(args),
+        Cmd::Git(args) => passthrough(&args),
+    }
+}
+
+/// Forward to real `git`, inheriting stdio so editors, pagers, prompts, and
+/// colors all work, then exit with git's own status code.
+fn passthrough(args: &[String]) -> ! {
+    match Command::new("git").args(args).status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("slu: could not run git: {e}");
+            std::process::exit(127);
+        }
     }
 }

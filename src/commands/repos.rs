@@ -1,4 +1,4 @@
-//! `gt status` — at-a-glance working-tree state for every repo under a path.
+//! `slu repos` — at-a-glance working-tree state for every repo under a path.
 //!
 //! For each repo it shows the current branch, how many files are dirty, and how
 //! far ahead/behind its upstream it is — so "which of my repos have uncommitted
