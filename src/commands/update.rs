@@ -35,6 +35,17 @@ pub fn run(args: Args) {
         }
         Ok(status) => {
             eprintln!("\n{}", "✗ update failed.".red());
+            // On Windows the running slu.exe is locked, so cargo can fail to
+            // overwrite it. Running the command from a fresh shell avoids that,
+            // because then slu.exe isn't the running process.
+            if cfg!(windows) {
+                eprintln!(
+                    "{}",
+                    "If it couldn't replace the running slu.exe, run this in a fresh terminal:"
+                        .dimmed()
+                );
+                eprintln!("    {}", "cargo install sluuz --force".bold());
+            }
             std::process::exit(status.code().unwrap_or(1));
         }
         Err(e) => {

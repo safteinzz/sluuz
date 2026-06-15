@@ -33,8 +33,11 @@ Run `slu <command> --help` for options specific to a superpower command.";
 
 // `derive` lets clap generate all the argument parsing boilerplate from annotations.
 #[derive(Parser)]
+// The app is `sluuz` (shown in --version); the command you type is the shorter
+// `slu` (shown in usage via bin_name).
 #[command(
-    name = "slu",
+    name = "sluuz",
+    bin_name = "slu",
     version,
     about = "git, but it sleuths — a git superset with cross-repo & history superpowers",
     after_help = EXAMPLES,
