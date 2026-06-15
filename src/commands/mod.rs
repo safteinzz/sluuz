@@ -4,3 +4,4 @@ pub mod scan;
 pub mod search;
 pub mod sync;
 pub mod tidy;
+pub mod update;

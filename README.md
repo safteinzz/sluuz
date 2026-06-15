@@ -17,7 +17,7 @@ cargo install sluuz
 ```
 
 This installs a single command: **`slu`** — three letters, same length as `git`
-itself. Update later with `cargo install sluuz --force`.
+itself. Update later with `slu update` (or `cargo install sluuz --force`).
 
 ## It's just git… until it isn't
 
@@ -101,6 +101,12 @@ every repo under you, in parallel.
 slu each pull --ff-only
 slu each switch main
 slu each "log --oneline -1"
+```
+
+### `slu update` — update sluuz itself
+
+```bash
+slu update               # cargo install sluuz --force, the easy way
 ```
 
 ## Common options

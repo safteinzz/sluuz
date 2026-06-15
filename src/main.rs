@@ -27,6 +27,7 @@ const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
   slu sync --pull            Fetch all repos and fast-forward where safe
   slu tidy                   List merged branches that are safe to delete
   slu each pull --ff-only    Run any git command in every repo
+  slu update                 Update sluuz itself to the latest release
 
 Run `slu <command> --help` for options specific to a superpower command.";
 
@@ -59,6 +60,8 @@ enum Cmd {
     Tidy(commands::tidy::Args),
     /// Run any git command in every repo under the current directory
     Each(commands::each::Args),
+    /// Update sluuz itself to the latest release (cargo install sluuz --force)
+    Update(commands::update::Args),
     /// Any other command is passed straight through to git
     #[command(external_subcommand)]
     Git(Vec<String>),
@@ -74,6 +77,7 @@ fn main() {
         Cmd::Sync(args) => commands::sync::run(args),
         Cmd::Tidy(args) => commands::tidy::run(args),
         Cmd::Each(args) => commands::each::run(args),
+        Cmd::Update(args) => commands::update::run(args),
         Cmd::Git(args) => passthrough(&args),
     }
 }
