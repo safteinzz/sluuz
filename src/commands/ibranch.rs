@@ -25,9 +25,13 @@ const COMMITS_PER_BRANCH: usize = 200;
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Include remote-tracking branches too
+    /// Show local and remote-tracking branches
     #[arg(short, long)]
     pub all: bool,
+
+    /// Show only remote-tracking branches (like `git branch -r`)
+    #[arg(short, long)]
+    pub remotes: bool,
 }
 
 struct Branch {
@@ -53,7 +57,7 @@ pub fn run(args: Args) {
         return;
     }
 
-    let branches = load_branches(args.all);
+    let branches = load_branches(args.all, args.remotes);
     if branches.is_empty() {
         eprintln!("no branches (or not a git repo)");
         return;
@@ -336,13 +340,19 @@ fn branch_item(b: &Branch) -> ListItem<'static> {
     ]))
 }
 
-fn load_branches(all: bool) -> Vec<Branch> {
+fn load_branches(all: bool, remotes_only: bool) -> Vec<Branch> {
     let format_arg = format!(
         "--format=%(HEAD){SEP}%(refname:short){SEP}%(committerdate:relative){SEP}%(authorname)"
     );
-    let mut args = vec!["for-each-ref", "--sort=-committerdate", &format_arg, "refs/heads"];
-    if all {
+    let mut args = vec!["for-each-ref", "--sort=-committerdate", &format_arg];
+    // default: local; -r: remotes only; -a: both.
+    if remotes_only && !all {
         args.push("refs/remotes");
+    } else if all {
+        args.push("refs/heads");
+        args.push("refs/remotes");
+    } else {
+        args.push("refs/heads");
     }
     git_capture(".", &args)
         .map(|out| {

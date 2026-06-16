@@ -122,15 +122,18 @@ Keys: `j`/`k` (or arrows) move between commits · `Ctrl-j`/`Ctrl-k` scroll the d
 
 ### `slu ibranch` — interactive branch explorer (TUI)
 
-Branches sorted by most recent activity up top (current branch marked), the
-selected branch's recent commits below.
+One level above `ilog`: pick a branch (sorted by recent activity, current one
+marked), then drill into its commits → a commit's files → a file's side-by-side
+diff, exactly like `ilog`.
 
 ```bash
 slu ibranch              # local branches
-slu ibranch --all        # include remote-tracking branches
+slu ibranch -r           # remote-tracking branches only (like git branch -r)
+slu ibranch -a           # local and remote
 ```
 
-Keys: `j`/`k` (or arrows) switch branches · `Ctrl-j`/`Ctrl-k` · `Ctrl-d`/`Ctrl-u` (vim half-page) scroll the commits · `q` / `Esc` / `Ctrl-C` quit
+Keys: `j`/`k` (or arrows) move the top pane, `Ctrl-j`/`Ctrl-k` the bottom pane;
+`Enter` drills in, `Esc` (or `Ctrl-[`) steps back one level; `q` / `Ctrl-C` quit.
 
 ### `slu update` — update sluuz itself
 
