@@ -11,7 +11,7 @@ use crate::git::git_capture;
 use crate::tui::{
     commit_item, file_item, half_page, is_back, is_down, is_open, is_up, load_commits,
     load_file_diff, load_files, pane_block, pane_width, pop_keyboard_enhancement,
-    push_keyboard_enhancement, Commit, FileEntry, SEP,
+    push_keyboard_enhancement, Commit, FileEntry, CTRL_MOVE, MOVE, SEP,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -259,14 +259,15 @@ fn draw(
         View::Branches => {
             let top = List::new(p.branches.iter().map(branch_item).collect::<Vec<_>>())
                 .block(pane_block(
-                    format!(" branches  {}/{}   j/k ", p.branch_sel + 1, p.branches.len()),
+                    format!(" branches  {}/{}   {MOVE} ", p.branch_sel + 1, p.branches.len()),
                     true,
                 ))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(top, areas[0], branch_state);
 
-            let title = commits_title(p.commits, p.commit_sel, "ctrl-j/k select · enter open");
+            let title =
+                commits_title(p.commits, p.commit_sel, &format!("{CTRL_MOVE} select · enter open"));
             let bottom = List::new(p.commits.iter().map(commit_item).collect::<Vec<_>>())
                 .block(pane_block(title, true))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
@@ -276,7 +277,7 @@ fn draw(
 
         // Level 2: commits on top, the commit's files on the bottom.
         View::Commit => {
-            let title = commits_title(p.commits, p.commit_sel, "j/k");
+            let title = commits_title(p.commits, p.commit_sel, MOVE);
             let top = List::new(p.commits.iter().map(commit_item).collect::<Vec<_>>())
                 .block(pane_block(title, true))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
@@ -287,7 +288,7 @@ fn draw(
                 " files  (none) ".to_string()
             } else {
                 format!(
-                    " files  {}/{}   ctrl-j/k select · enter open · esc back ",
+                    " files  {}/{}   {CTRL_MOVE} select · enter open · esc back ",
                     p.file_sel + 1,
                     p.files.len()
                 )
@@ -311,7 +312,7 @@ fn draw(
             let path = p.files.get(p.file_sel).map(|f| f.path.as_str()).unwrap_or("");
             let view = Paragraph::new(p.diff.clone())
                 .block(pane_block(
-                    format!(" {path}   j/k·ctrl-d/u scroll · esc back · q quit "),
+                    format!(" {path}   {MOVE}·ctrl-d/u scroll · esc back · q quit "),
                     true,
                 ))
                 .scroll((p.diff_scroll, 0));

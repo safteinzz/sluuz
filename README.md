@@ -107,18 +107,17 @@ slu each "log --oneline -1"
 
 Opens a full-screen browser: scroll the commit list up top, see the selected
 commit's diff below. The interactive sibling of `slu trace`. (The `i` prefix
-marks the interactive views — more to come, like `ibranch`.)
+marks the interactive views, alongside `ibranch`.)
 
-If [`delta`](https://github.com/dandavison/delta) is installed it's used to
-render the diff side-by-side and syntax-highlighted; otherwise a plain colorized
-diff is shown.
+Diffs are rendered side-by-side and syntax-highlighted in pure Rust (via
+`syntect`) — no external tools required.
 
 ```bash
 slu ilog                 # explore the current branch
 slu ilog --all -n 500    # all branches, more history
 ```
 
-Keys: `j`/`k` (or arrows) move between commits · `Ctrl-j`/`Ctrl-k` scroll the diff a few lines · `Ctrl-d`/`Ctrl-u` half-page (vim) · `q` / `Esc` / `Ctrl-C` quit
+Keys: `j`/`k` (or arrows) move between commits · `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`) select a file · `Ctrl-d`/`Ctrl-u` half-page scroll (vim) · `q` / `Esc` / `Ctrl-C` quit
 
 ### `slu ibranch` — interactive branch explorer (TUI)
 
@@ -132,8 +131,9 @@ slu ibranch -r           # remote-tracking branches only (like git branch -r)
 slu ibranch -a           # local and remote
 ```
 
-Keys: `j`/`k` (or arrows) move the top pane, `Ctrl-j`/`Ctrl-k` the bottom pane;
-`Enter` drills in, `Esc` (or `Ctrl-[`) steps back one level; `q` / `Ctrl-C` quit.
+Keys: `j`/`k` (or arrows) move the top pane, `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`)
+the bottom pane; `Enter` drills in, `Esc` (or `Ctrl-[`) steps back one level;
+`q` / `Ctrl-C` quit.
 
 ### `slu update` — update sluuz itself
 
@@ -145,6 +145,21 @@ slu update               # cargo install sluuz --force, the easy way
 
 The multi-repo commands accept a `path` argument (defaults to `.`) and
 `-d, --depth <N>` — how many directory levels deep to look for repos (default 3).
+
+## Troubleshooting
+
+### `Ctrl-J` / `Ctrl-K` do nothing in some terminals
+
+A few terminals — VS Code's integrated terminal among them — can't distinguish
+`Ctrl-J` from Enter, which leaves the bottom-pane keys in `ilog`/`ibranch` dead.
+slu accepts `Ctrl-Down` and `Ctrl-Up` for those same actions, so the fix is to
+make the terminal send those instead.
+
+In VS Code, add two keybindings (Command Palette → *Open Keyboard Shortcuts
+(JSON)*): bind `ctrl+j` and `ctrl+k`, scoped to `"when": "terminalFocus"`, to the
+`workbench.action.terminal.sendSequence` command. The sequence to send is the ESC
+character (write it as the JSON escape backslash-u-001b) followed by `[1;5B` for
+`Ctrl-Down` and `[1;5A` for `Ctrl-Up`.
 
 ## License
 

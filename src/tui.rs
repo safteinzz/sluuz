@@ -22,6 +22,13 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 /// ASCII unit separator — a field delimiter that won't appear in our fields.
 pub const SEP: char = '\u{1f}';
 
+/// Key-hint labels shown in pane titles, defined once so every pane reads the
+/// same. `MOVE` is plain navigation (arrows and j/k both work everywhere);
+/// `CTRL_MOVE` is the bottom-pane / file selection — Ctrl-arrows are the
+/// terminal-safe form, since some terminals can't send a distinct Ctrl-j.
+pub const MOVE: &str = "↑↓/jk";
+pub const CTRL_MOVE: &str = "ctrl-↑↓/jk";
+
 /// Tint for changed cells (left = removed, right = added).
 const REMOVED_BG: Color = Color::Rgb(55, 24, 24);
 const ADDED_BG: Color = Color::Rgb(24, 46, 24);

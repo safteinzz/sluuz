@@ -10,7 +10,7 @@
 use crate::tui::{
     commit_item, file_item, half_page, is_back, is_down, is_open, is_up, load_commits,
     load_file_diff, load_files, pane_block, pane_width, pop_keyboard_enhancement,
-    push_keyboard_enhancement, Commit, FileEntry,
+    push_keyboard_enhancement, Commit, FileEntry, CTRL_MOVE, MOVE,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -199,7 +199,7 @@ fn draw(
 
     let commits_list = List::new(commits.iter().map(commit_item).collect::<Vec<_>>())
         .block(pane_block(
-            format!(" commits  {}/{}   j/k ", commit_sel + 1, commits.len()),
+            format!(" commits  {}/{}   {MOVE} ", commit_sel + 1, commits.len()),
             browsing,
         ))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
@@ -211,7 +211,7 @@ fn draw(
             let path = files.get(file_sel).map(|f| f.path.as_str()).unwrap_or("");
             let view = Paragraph::new(diff.clone())
                 .block(pane_block(
-                    format!(" {path}   j/k·ctrl-d/u scroll · esc back · q quit "),
+                    format!(" {path}   {MOVE}·ctrl-d/u scroll · esc back · q quit "),
                     true,
                 ))
                 .scroll((diff_scroll, 0));
@@ -222,7 +222,7 @@ fn draw(
                 " files  (none) ".to_string()
             } else {
                 format!(
-                    " files  {}/{}   ctrl-j/k select · enter open · q quit ",
+                    " files  {}/{}   {CTRL_MOVE} select · enter open · q quit ",
                     file_sel + 1,
                     files.len()
                 )
