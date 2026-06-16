@@ -9,7 +9,8 @@
 
 use crate::tui::{
     commit_item, file_item, half_page, is_back, is_down, is_open, is_up, load_commits,
-    load_file_diff, load_files, pane_block, pane_width, Commit, FileEntry,
+    load_file_diff, load_files, pane_block, pane_width, pop_keyboard_enhancement,
+    push_keyboard_enhancement, Commit, FileEntry,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -52,7 +53,11 @@ pub fn run(args: Args) {
     }
 
     let mut terminal = ratatui::init();
+    let enhanced = push_keyboard_enhancement();
     let result = event_loop(&mut terminal, &commits);
+    if enhanced {
+        pop_keyboard_enhancement();
+    }
     ratatui::restore();
 
     if let Err(e) = result {

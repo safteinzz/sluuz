@@ -3,11 +3,17 @@
 //! Rust via syntect), and common widget helpers.
 
 use crate::git::git_capture;
-use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::{
+    KeyCode, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
+use ratatui::crossterm::terminal::supports_keyboard_enhancement;
+use ratatui::crossterm::{execute, ExecutableCommand};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, ListItem};
 use ratatui::DefaultTerminal;
+use std::io::stdout;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Style as SynStyle, Theme, ThemeSet};
@@ -19,6 +25,27 @@ pub const SEP: char = '\u{1f}';
 /// Tint for changed cells (left = removed, right = added).
 const REMOVED_BG: Color = Color::Rgb(55, 24, 24);
 const ADDED_BG: Color = Color::Rgb(24, 46, 24);
+
+// ── keyboard enhancement (kitty protocol) ───────────────────────────────────
+
+/// Request DISAMBIGUATE_ESCAPE_CODES if the terminal supports the kitty
+/// keyboard protocol. Returns true if pushed (caller must call pop).
+/// This makes Ctrl+J distinct from Enter in terminals like VS Code.
+pub fn push_keyboard_enhancement() -> bool {
+    if supports_keyboard_enhancement().unwrap_or(false) {
+        let _ = execute!(
+            stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+        true
+    } else {
+        false
+    }
+}
+
+pub fn pop_keyboard_enhancement() {
+    let _ = stdout().execute(PopKeyboardEnhancementFlags);
+}
 
 pub struct Commit {
     pub hash: String,
