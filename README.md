@@ -103,6 +103,35 @@ slu each switch main
 slu each "log --oneline -1"
 ```
 
+### `slu ilog` — interactive log explorer (TUI)
+
+Opens a full-screen browser: scroll the commit list up top, see the selected
+commit's diff below. The interactive sibling of `slu trace`. (The `i` prefix
+marks the interactive views — more to come, like `ibranch`.)
+
+If [`delta`](https://github.com/dandavison/delta) is installed it's used to
+render the diff side-by-side and syntax-highlighted; otherwise a plain colorized
+diff is shown.
+
+```bash
+slu ilog                 # explore the current branch
+slu ilog --all -n 500    # all branches, more history
+```
+
+Keys: `j`/`k` (or arrows) move between commits · `Ctrl-j`/`Ctrl-k` scroll the diff a few lines · `Ctrl-d`/`Ctrl-u` half-page (vim) · `q` / `Esc` / `Ctrl-C` quit
+
+### `slu ibranch` — interactive branch explorer (TUI)
+
+Branches sorted by most recent activity up top (current branch marked), the
+selected branch's recent commits below.
+
+```bash
+slu ibranch              # local branches
+slu ibranch --all        # include remote-tracking branches
+```
+
+Keys: `j`/`k` (or arrows) switch branches · `Ctrl-j`/`Ctrl-k` · `Ctrl-d`/`Ctrl-u` (vim half-page) scroll the commits · `q` / `Esc` / `Ctrl-C` quit
+
 ### `slu update` — update sluuz itself
 
 ```bash

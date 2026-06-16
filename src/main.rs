@@ -8,10 +8,14 @@
 //!   slu sync   [path]      Fetch (and optionally fast-forward) all repos
 //!   slu tidy   [path]      Find merged, deletable branches across all repos
 //!   slu each   <git args>  Run any git command in every repo
+//!   slu trace              A prettier history view (does not shadow `git log`)
+//!   slu ilog               Interactive log explorer (TUI)
+//!   slu ibranch            Interactive branch explorer (TUI)
 
 mod commands;
 mod git;
 mod history;
+mod tui;
 
 use clap::{Parser, Subcommand};
 use std::process::Command;
@@ -27,6 +31,9 @@ const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
   slu sync --pull            Fetch all repos and fast-forward where safe
   slu tidy                   List merged branches that are safe to delete
   slu each pull --ff-only    Run any git command in every repo
+  slu trace --graph          A prettier log (git log itself is untouched)
+  slu ilog                   Interactive TUI: browse commits and their diffs
+  slu ibranch                Interactive TUI: browse branches and their commits
   slu update                 Update sluuz itself to the latest release
 
 Run `slu <command> --help` for options specific to a superpower command.";
@@ -63,6 +70,12 @@ enum Cmd {
     Tidy(commands::tidy::Args),
     /// Run any git command in every repo under the current directory
     Each(commands::each::Args),
+    /// A prettier history view (aligned log; --graph keeps git's graph)
+    Trace(commands::trace::Args),
+    /// Interactive log explorer (TUI) — scroll commits, view diffs
+    Ilog(commands::ilog::Args),
+    /// Interactive branch explorer (TUI) — browse branches and their commits
+    Ibranch(commands::ibranch::Args),
     /// Update sluuz itself to the latest release (cargo install sluuz --force)
     Update(commands::update::Args),
     /// Any other command is passed straight through to git
@@ -80,6 +93,9 @@ fn main() {
         Cmd::Sync(args) => commands::sync::run(args),
         Cmd::Tidy(args) => commands::tidy::run(args),
         Cmd::Each(args) => commands::each::run(args),
+        Cmd::Trace(args) => commands::trace::run(args),
+        Cmd::Ilog(args) => commands::ilog::run(args),
+        Cmd::Ibranch(args) => commands::ibranch::run(args),
         Cmd::Update(args) => commands::update::run(args),
         Cmd::Git(args) => passthrough(&args),
     }

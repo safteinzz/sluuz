@@ -1,7 +1,10 @@
 pub mod each;
+pub mod ibranch;
+pub mod ilog;
 pub mod repos;
 pub mod scan;
 pub mod search;
 pub mod sync;
 pub mod tidy;
+pub mod trace;
 pub mod update;

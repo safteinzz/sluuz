@@ -1,6 +1,6 @@
 [package]
 name = "sluuz"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 description = "git, but it sleuths — a git superset with cross-repo search, secret scanning, and multi-repo management"
 license = "AGPL-3.0-only"
@@ -12,7 +12,12 @@ name = "slu"
 path = "src/main.rs"
 
 [dependencies]
-clap    = { version = "4", features = ["derive"] } # CLI argument parsing
-colored = "2"                                       # terminal colors
-rayon   = "1"                                       # parallel iterators
-walkdir = "2"                                       # recursive directory walking
+clap          = { version = "4", features = ["derive"] } # CLI argument parsing
+colored       = "2"                                       # terminal colors
+rayon         = "1"                                       # parallel iterators
+walkdir       = "2"                                       # recursive directory walking
+terminal_size = "0.4"                                     # detect terminal width for truncation
+ratatui       = "0.29"                                    # TUI for `slu ilog` / `ibranch`
+# syntect with the pure-Rust fancy-regex backend (no C/oniguruma) so it builds
+# clean on Windows; used to syntax-highlight diffs in the TUI.
+syntect       = { version = "5", default-features = false, features = ["default-fancy"] }
