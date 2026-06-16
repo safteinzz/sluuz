@@ -8,9 +8,11 @@
 //! q / Ctrl-C quit; Esc steps back. Arrow keys mirror j/k everywhere.
 
 use crate::tui::{
-    commit_item, file_item, half_page, is_back, is_down, is_open, is_up, load_commits,
-    load_file_diff, load_files, pane_block, pane_width, pop_keyboard_enhancement,
-    push_keyboard_enhancement, Commit, FileEntry, CTRL_MOVE, MOVE,
+    clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, file_item, half_page, is_back,
+    is_down, is_left, is_open, is_right, is_up, list_scrollbar, load_commits, load_diff_raw,
+    load_files, pane_block, pane_height, pane_width, pop_keyboard_enhancement, prepare_diff,
+    push_keyboard_enhancement, render_prepared, Commit, FileEntry, RenderedDiff, CTRL_Y_MOVE,
+    X_MOVE, Y_MOVE,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -72,7 +74,9 @@ fn event_loop(terminal: &mut DefaultTerminal, commits: &[Commit]) -> io::Result<
     let mut file_sel = 0usize;
     let mut view = View::Browse;
     let mut diff = Text::default();
+    let mut prepared = RenderedDiff::default();
     let mut diff_scroll = 0u16;
+    let mut diff_hscroll = 0u16;
 
     let mut commit_state = ListState::default();
     commit_state.select(Some(0));
@@ -101,7 +105,7 @@ fn event_loop(terminal: &mut DefaultTerminal, commits: &[Commit]) -> io::Result<
                 if w != width {
                     width = w;
                     if matches!(view, View::Diff) {
-                        diff = load_file_diff(&commits[commit_sel].hash, &files[file_sel].path, width);
+                        diff = render_prepared(&prepared, width, diff_hscroll);
                     }
                 }
             }
@@ -142,7 +146,10 @@ fn event_loop(terminal: &mut DefaultTerminal, commits: &[Commit]) -> io::Result<
                                 file_state.select(Some(0));
                             }
                         } else if is_open(code) && !files.is_empty() {
-                            diff = load_file_diff(&commits[commit_sel].hash, &files[file_sel].path, width);
+                            let raw = load_diff_raw(&commits[commit_sel].hash, &files[file_sel].path);
+                            prepared = prepare_diff(&raw);
+                            diff_hscroll = 0;
+                            diff = render_prepared(&prepared, width, 0);
                             diff_scroll = 0;
                             view = View::Diff;
                         } else if code == KeyCode::Esc {
@@ -167,9 +174,21 @@ fn event_loop(terminal: &mut DefaultTerminal, commits: &[Commit]) -> io::Result<
                             diff_scroll = diff_scroll.saturating_add(1);
                         } else if is_up(code) {
                             diff_scroll = diff_scroll.saturating_sub(1);
+                        } else if is_right(code) {
+                            diff_hscroll = clamp_hscroll(
+                                diff_hscroll.saturating_add(8),
+                                prepared.max_line(),
+                                pane_width(terminal) / 2,
+                            );
+                            diff = render_prepared(&prepared, width, diff_hscroll);
+                        } else if is_left(code) {
+                            diff_hscroll = diff_hscroll.saturating_sub(8);
+                            diff = render_prepared(&prepared, width, diff_hscroll);
                         } else if is_back(code) {
                             view = View::Browse;
                         }
+                        diff_scroll =
+                            clamp_scroll(diff_scroll, diff.lines.len(), pane_height(terminal));
                     }
                 }
             }
@@ -199,30 +218,32 @@ fn draw(
 
     let commits_list = List::new(commits.iter().map(commit_item).collect::<Vec<_>>())
         .block(pane_block(
-            format!(" commits  {}/{}   {MOVE} ", commit_sel + 1, commits.len()),
+            format!(" commits  {}/{}   {Y_MOVE} ", commit_sel + 1, commits.len()),
             browsing,
         ))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("› ");
     frame.render_stateful_widget(commits_list, areas[0], commit_state);
+    list_scrollbar(frame, areas[0], commits.len(), commit_state.offset());
 
     match view {
         View::Diff => {
             let path = files.get(file_sel).map(|f| f.path.as_str()).unwrap_or("");
             let view = Paragraph::new(diff.clone())
                 .block(pane_block(
-                    format!(" {path}   {MOVE}·ctrl-d/u scroll · esc back · q quit "),
+                    format!(" {path}   {Y_MOVE}·ctrl-d/u scroll · {X_MOVE} pan · esc back · q quit "),
                     true,
                 ))
                 .scroll((diff_scroll, 0));
             frame.render_widget(view, areas[1]);
+            diff_scrollbar(frame, areas[1], diff.lines.len(), diff_scroll);
         }
         _ => {
             let title = if files.is_empty() {
                 " files  (none) ".to_string()
             } else {
                 format!(
-                    " files  {}/{}   {CTRL_MOVE} select · enter open · q quit ",
+                    " files  {}/{}   {CTRL_Y_MOVE} select · enter open · q quit ",
                     file_sel + 1,
                     files.len()
                 )
@@ -232,6 +253,7 @@ fn draw(
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(list, areas[1], file_state);
+            list_scrollbar(frame, areas[1], files.len(), file_state.offset());
         }
     }
 }

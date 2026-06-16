@@ -9,10 +9,11 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::{execute, ExecutableCommand};
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, ListItem};
-use ratatui::DefaultTerminal;
+use ratatui::widgets::{Block, Borders, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::{DefaultTerminal, Frame};
 use std::io::stdout;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
@@ -23,11 +24,15 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 pub const SEP: char = '\u{1f}';
 
 /// Key-hint labels shown in pane titles, defined once so every pane reads the
-/// same. `MOVE` is plain navigation (arrows and j/k both work everywhere);
-/// `CTRL_MOVE` is the bottom-pane / file selection — Ctrl-arrows are the
-/// terminal-safe form, since some terminals can't send a distinct Ctrl-j.
-pub const MOVE: &str = "↑↓/jk";
-pub const CTRL_MOVE: &str = "ctrl-↑↓/jk";
+/// same. `Y_MOVE`/`X_MOVE` are plain vertical/horizontal navigation (arrows and
+/// hjkl both work everywhere); the `CTRL_` variants are the modifier forms used
+/// for the bottom pane — Ctrl-arrows are the terminal-safe way to send them,
+/// since some terminals can't send a distinct Ctrl-letter.
+pub const Y_MOVE: &str = "↑↓/jk";
+pub const CTRL_Y_MOVE: &str = "ctrl-↑↓/jk";
+pub const X_MOVE: &str = "←→/hl";
+#[allow(dead_code)] // reserved for a future Ctrl-pan binding
+pub const CTRL_X_MOVE: &str = "ctrl-←→/hl";
 
 /// Tint for changed cells (left = removed, right = added).
 const REMOVED_BG: Color = Color::Rgb(55, 24, 24);
@@ -112,10 +117,19 @@ pub fn load_files(hash: &str) -> Vec<FileEntry> {
         .unwrap_or_default()
 }
 
-/// One file's diff from a commit, rendered side-by-side at the given width.
-pub fn load_file_diff(hash: &str, path: &str, width: u16) -> Text<'static> {
-    let raw = git_capture(".", &["show", "--format=", hash, "--", path]).unwrap_or_default();
-    side_by_side(&raw, width)
+/// One file's raw `git show` diff text (fetched once, then re-rendered locally
+/// for scrolling without re-shelling out to git).
+pub fn load_diff_raw(hash: &str, path: &str) -> String {
+    git_capture(".", &["show", "--format=", hash, "--", path]).unwrap_or_default()
+}
+
+/// Longest content line in a raw diff (minus its +/-/space prefix), for
+/// clamping horizontal scroll.
+pub fn max_line_width(raw: &str) -> usize {
+    raw.lines()
+        .map(|l| l.chars().count().saturating_sub(1))
+        .max()
+        .unwrap_or(0)
 }
 
 // ── widget helpers ──────────────────────────────────────────────────────────
@@ -166,13 +180,21 @@ pub fn is_down(c: KeyCode) -> bool {
 pub fn is_up(c: KeyCode) -> bool {
     matches!(c, KeyCode::Char('k') | KeyCode::Up)
 }
-/// Open/drill-in = Enter, l, or →.
+/// Open/drill-in = Enter only (so l/→ are free for horizontal diff scroll).
 pub fn is_open(c: KeyCode) -> bool {
-    matches!(c, KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'))
+    matches!(c, KeyCode::Enter)
 }
-/// Back/step-out = Esc, h, or ←.
+/// Back/step-out = Esc (Ctrl-[ sends Esc too), so h/← are free to scroll.
 pub fn is_back(c: KeyCode) -> bool {
-    matches!(c, KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'))
+    matches!(c, KeyCode::Esc)
+}
+/// Pan left = h or ←.
+pub fn is_left(c: KeyCode) -> bool {
+    matches!(c, KeyCode::Char('h') | KeyCode::Left)
+}
+/// Pan right = l or →.
+pub fn is_right(c: KeyCode) -> bool {
+    matches!(c, KeyCode::Char('l') | KeyCode::Right)
 }
 
 pub fn pane_width(terminal: &DefaultTerminal) -> u16 {
@@ -182,15 +204,56 @@ pub fn pane_width(terminal: &DefaultTerminal) -> u16 {
         .unwrap_or(120)
 }
 
-/// Half the height of the lower (~60%) pane, for vim Ctrl-d/Ctrl-u.
-pub fn half_page(terminal: &DefaultTerminal) -> u16 {
+/// Inner height of the lower (~60%) pane — the diff viewport, in rows.
+pub fn pane_height(terminal: &DefaultTerminal) -> u16 {
     terminal
         .size()
-        .map(|s| {
-            let pane = (s.height as u32 * 6 / 10).saturating_sub(2);
-            ((pane / 2).max(1)) as u16
-        })
-        .unwrap_or(10)
+        .map(|s| ((s.height as u32 * 6 / 10).saturating_sub(2).max(1)) as u16)
+        .unwrap_or(20)
+}
+
+/// Half the height of the lower (~60%) pane, for vim Ctrl-d/Ctrl-u.
+pub fn half_page(terminal: &DefaultTerminal) -> u16 {
+    (pane_height(terminal) / 2).max(1)
+}
+
+/// Clamp a scroll offset so the last line can't scroll above the viewport —
+/// stops you from scrolling off the bottom into empty space.
+pub fn clamp_scroll(scroll: u16, total_lines: usize, viewport: u16) -> u16 {
+    let max = (total_lines.min(u16::MAX as usize) as u16).saturating_sub(viewport);
+    scroll.min(max)
+}
+
+/// Clamp horizontal scroll so you can't pan past the longest line. `cell_w` is
+/// roughly one side's visible width.
+pub fn clamp_hscroll(hscroll: u16, max_line: usize, cell_w: u16) -> u16 {
+    let max = (max_line.min(u16::MAX as usize) as u16).saturating_sub(cell_w);
+    hscroll.min(max)
+}
+
+/// Draw a vertical scrollbar down the right edge of `area`, with the thumb at
+/// `top` of `total` rows. No bar is drawn when everything already fits.
+fn render_vscrollbar(frame: &mut Frame, area: Rect, total: usize, top: usize) {
+    let viewport = area.height.saturating_sub(2) as usize;
+    if total <= viewport {
+        return; // everything fits; no scrollbar needed
+    }
+    let mut state = ScrollbarState::new(total - viewport).position(top);
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None);
+    frame.render_stateful_widget(bar, area.inner(Margin::new(0, 1)), &mut state);
+}
+
+/// Scrollbar for a diff pane: thumb tracks the scroll line.
+pub fn diff_scrollbar(frame: &mut Frame, area: Rect, total_lines: usize, scroll: u16) {
+    render_vscrollbar(frame, area, total_lines, scroll as usize);
+}
+
+/// Scrollbar for a list pane: thumb tracks the visible window (the list's
+/// `offset`). Call it right after rendering the list so the offset is current.
+pub fn list_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize) {
+    render_vscrollbar(frame, area, total, offset);
 }
 
 // ── side-by-side diff rendering ─────────────────────────────────────────────
@@ -202,33 +265,64 @@ struct FileHl {
     new: HighlightLines<'static>,
 }
 
-/// Parse `git show` output into side-by-side rows: removed lines on the left
-/// (red), added on the right (green), context on both, headers full-width.
-fn side_by_side(raw: &str, width: u16) -> Text<'static> {
+/// One accumulated changed line: its line number and highlighted spans.
+type NumLine = (usize, Vec<Span<'static>>);
+
+/// One row of a parsed diff: either a full-width header line, or a side-by-side
+/// pair whose cells are already syntax-highlighted (so re-laying out for a
+/// scroll is cheap — no re-highlighting).
+enum DiffRow {
+    Header(Line<'static>),
+    Pair {
+        lnum: Option<usize>,
+        lspans: Vec<Span<'static>>,
+        lbg: Option<Color>,
+        rnum: Option<usize>,
+        rspans: Vec<Span<'static>>,
+        rbg: Option<Color>,
+    },
+}
+
+/// A diff parsed and highlighted once. Cheap to re-render at any width/hscroll.
+#[derive(Default)]
+pub struct RenderedDiff {
+    rows: Vec<DiffRow>,
+    gutter_w: usize,
+    max_line: usize,
+}
+
+impl RenderedDiff {
+    /// Longest content line, for clamping horizontal scroll.
+    pub fn max_line(&self) -> usize {
+        self.max_line
+    }
+}
+
+/// Parse `git show` output and syntax-highlight every line **once**. This is
+/// the expensive step (syntect); call it when a file is opened, then re-render
+/// with `render_prepared` for free on every scroll.
+pub fn prepare_diff(raw: &str) -> RenderedDiff {
     let ps = syntaxes();
     let theme = theme();
 
-    let inner = width as usize;
-    let col = inner.saturating_sub(3) / 2; // " │ " separator = 3 cols
-    let lw = col.max(1);
-    let rw = inner.saturating_sub(3).saturating_sub(lw).max(1);
-
-    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut rows: Vec<DiffRow> = Vec::new();
     let mut hl: Option<FileHl> = None;
     let mut in_patch = false;
-    let mut rem: Vec<Vec<Span<'static>>> = Vec::new();
-    let mut add: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut old_ln = 0usize;
+    let mut new_ln = 0usize;
+    let mut rem: Vec<NumLine> = Vec::new();
+    let mut add: Vec<NumLine> = Vec::new();
 
     for line in raw.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
-            flush_change(&mut out, &mut rem, &mut add, lw, rw);
+            flush_pairs(&mut rows, &mut rem, &mut add);
             in_patch = true;
             let syntax = syntax_for(ps, rest.rsplit(" b/").next().unwrap_or(""));
             hl = Some(FileHl {
                 old: HighlightLines::new(syntax, theme),
                 new: HighlightLines::new(syntax, theme),
             });
-            out.push(plain(line, dim().add_modifier(Modifier::BOLD)));
+            rows.push(DiffRow::Header(plain(line, dim().add_modifier(Modifier::BOLD))));
             continue;
         }
 
@@ -236,91 +330,204 @@ fn side_by_side(raw: &str, width: u16) -> Text<'static> {
             if line.is_empty() {
                 continue;
             }
-            out.push(plain(line, Style::default()));
+            rows.push(DiffRow::Header(plain(line, Style::default())));
             continue;
         }
 
         if line.starts_with("@@") {
-            flush_change(&mut out, &mut rem, &mut add, lw, rw);
-            out.push(plain(line, Style::default().fg(Color::Cyan)));
+            flush_pairs(&mut rows, &mut rem, &mut add);
+            if let Some((a, _, c, _)) = parse_hunk(line) {
+                old_ln = a;
+                new_ln = c;
+            }
+            rows.push(DiffRow::Header(plain(line, Style::default().fg(Color::Cyan))));
             continue;
         }
         if is_meta(line) {
-            flush_change(&mut out, &mut rem, &mut add, lw, rw);
-            out.push(plain(line, dim()));
+            flush_pairs(&mut rows, &mut rem, &mut add);
+            rows.push(DiffRow::Header(plain(line, dim())));
             continue;
         }
 
         if let Some(code) = line.strip_prefix('-') {
             let spans = hl_old(&mut hl, ps, code);
-            rem.push(spans);
+            rem.push((old_ln, spans));
+            old_ln += 1;
         } else if let Some(code) = line.strip_prefix('+') {
             let spans = hl_new(&mut hl, ps, code);
-            add.push(spans);
+            add.push((new_ln, spans));
+            new_ln += 1;
         } else if let Some(code) = line.strip_prefix(' ') {
-            flush_change(&mut out, &mut rem, &mut add, lw, rw);
+            flush_pairs(&mut rows, &mut rem, &mut add);
             let l = hl_old(&mut hl, ps, code);
             let r = hl_new(&mut hl, ps, code);
-            out.push(row(l, lw, None, r, rw, None));
+            rows.push(DiffRow::Pair {
+                lnum: Some(old_ln),
+                lspans: l,
+                lbg: None,
+                rnum: Some(new_ln),
+                rspans: r,
+                rbg: None,
+            });
+            old_ln += 1;
+            new_ln += 1;
         } else {
-            flush_change(&mut out, &mut rem, &mut add, lw, rw);
-            out.push(plain(line, dim()));
+            flush_pairs(&mut rows, &mut rem, &mut add);
+            rows.push(DiffRow::Header(plain(line, dim())));
         }
     }
-    flush_change(&mut out, &mut rem, &mut add, lw, rw);
+    flush_pairs(&mut rows, &mut rem, &mut add);
 
-    Text::from(out)
+    RenderedDiff {
+        rows,
+        gutter_w: gutter_width(raw),
+        max_line: max_line_width(raw),
+    }
 }
 
-fn flush_change(
-    out: &mut Vec<Line<'static>>,
-    rem: &mut Vec<Vec<Span<'static>>>,
-    add: &mut Vec<Vec<Span<'static>>>,
-    lw: usize,
-    rw: usize,
-) {
+/// Pair up accumulated removed/added lines into side-by-side `Pair` rows.
+fn flush_pairs(rows: &mut Vec<DiffRow>, rem: &mut Vec<NumLine>, add: &mut Vec<NumLine>) {
     let n = rem.len().max(add.len());
     for i in 0..n {
-        let (lspans, lbg) = match rem.get(i) {
-            Some(s) => (s.clone(), Some(REMOVED_BG)),
-            None => (Vec::new(), None),
+        let (lnum, lspans, lbg) = match rem.get(i) {
+            Some((num, s)) => (Some(*num), s.clone(), Some(REMOVED_BG)),
+            None => (None, Vec::new(), None),
         };
-        let (rspans, rbg) = match add.get(i) {
-            Some(s) => (s.clone(), Some(ADDED_BG)),
-            None => (Vec::new(), None),
+        let (rnum, rspans, rbg) = match add.get(i) {
+            Some((num, s)) => (Some(*num), s.clone(), Some(ADDED_BG)),
+            None => (None, Vec::new(), None),
         };
-        out.push(row(lspans, lw, lbg, rspans, rw, rbg));
+        rows.push(DiffRow::Pair {
+            lnum,
+            lspans,
+            lbg,
+            rnum,
+            rspans,
+            rbg,
+        });
     }
     rem.clear();
     add.clear();
 }
 
-fn row(
-    lspans: Vec<Span<'static>>,
-    lw: usize,
-    lbg: Option<Color>,
-    rspans: Vec<Span<'static>>,
-    rw: usize,
-    rbg: Option<Color>,
-) -> Line<'static> {
-    let mut spans = fit_cell(lspans, lw, lbg);
-    spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-    spans.extend(fit_cell(rspans, rw, rbg));
-    Line::from(spans)
+/// Lay out a prepared diff at `width`, panned right by `hscroll` columns. Cheap:
+/// just slices the already-highlighted spans into columns — no highlighting.
+pub fn render_prepared(d: &RenderedDiff, width: u16, hscroll: u16) -> Text<'static> {
+    let g = d.gutter_w;
+    let inner = width as usize;
+    // layout: [num g][ ][left lw] " │ " [num g][ ][right rw]
+    let avail = inner.saturating_sub(2 * g + 5);
+    let lw = (avail / 2).max(1);
+    let rw = avail.saturating_sub(lw).max(1);
+    let hs = hscroll as usize;
+
+    let lines: Vec<Line<'static>> = d
+        .rows
+        .iter()
+        .map(|row| match row {
+            DiffRow::Header(l) => l.clone(),
+            DiffRow::Pair {
+                lnum,
+                lspans,
+                lbg,
+                rnum,
+                rspans,
+                rbg,
+            } => {
+                let mut spans = gutter(*lnum, g, *lbg);
+                spans.extend(fit_cell(lspans.clone(), lw, *lbg, hs));
+                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                spans.extend(gutter(*rnum, g, *rbg));
+                spans.extend(fit_cell(rspans.clone(), rw, *rbg, hs));
+                Line::from(spans)
+            }
+        })
+        .collect();
+
+    Text::from(lines)
 }
 
-/// Truncate/pad a cell's spans to exactly `width` display columns, applying an
-/// optional background to the whole cell (including the padding).
-fn fit_cell(spans: Vec<Span<'static>>, width: usize, bg: Option<Color>) -> Vec<Span<'static>> {
+/// A right-aligned line-number gutter `g` wide plus a trailing space.
+fn gutter(num: Option<usize>, g: usize, bg: Option<Color>) -> Vec<Span<'static>> {
+    let text = match num {
+        Some(n) => format!("{n:>g$} "),
+        None => " ".repeat(g + 1),
+    };
+    let mut style = Style::default().fg(Color::DarkGray);
+    if let Some(bg) = bg {
+        style = style.bg(bg);
+    }
+    vec![Span::styled(text, style)]
+}
+
+/// Column width for the line-number gutter: digits of the largest line number
+/// any hunk reaches, at least 3.
+fn gutter_width(raw: &str) -> usize {
+    let mut max = 1usize;
+    for line in raw.lines() {
+        if line.starts_with("@@") {
+            if let Some((a, b, c, d)) = parse_hunk(line) {
+                max = max.max(a + b).max(c + d);
+            }
+        }
+    }
+    digits(max).max(3)
+}
+
+fn digits(mut n: usize) -> usize {
+    let mut d = 1;
+    while n >= 10 {
+        n /= 10;
+        d += 1;
+    }
+    d
+}
+
+/// Parse a hunk header `@@ -a,b +c,d @@` into `(a, b, c, d)`. The counts `b`/`d`
+/// default to 1 when omitted (`@@ -a +c @@`).
+fn parse_hunk(line: &str) -> Option<(usize, usize, usize, usize)> {
+    let body = line.strip_prefix("@@ ")?.split(" @@").next()?; // "-a,b +c,d"
+    let mut parts = body.split(' ');
+    let (a, b) = parse_pair(parts.next()?.strip_prefix('-')?)?;
+    let (c, d) = parse_pair(parts.next()?.strip_prefix('+')?)?;
+    Some((a, b, c, d))
+}
+
+fn parse_pair(s: &str) -> Option<(usize, usize)> {
+    let mut it = s.split(',');
+    let start = it.next()?.parse().ok()?;
+    let count = it.next().and_then(|x| x.parse().ok()).unwrap_or(1);
+    Some((start, count))
+}
+
+/// Slide a cell left by `skip` display columns (horizontal scroll), then
+/// truncate/pad to exactly `width` columns, applying an optional background to
+/// the whole cell (including the padding).
+fn fit_cell(
+    spans: Vec<Span<'static>>,
+    width: usize,
+    bg: Option<Color>,
+    skip: usize,
+) -> Vec<Span<'static>> {
     let mut out = Vec::new();
-    let mut used = 0usize;
+    let mut skipped = 0usize; // columns dropped off the left so far
+    let mut used = 0usize; // columns emitted into the cell
     for sp in spans {
         if used >= width {
             break;
         }
         let chars: Vec<char> = sp.content.chars().collect();
-        let take = chars.len().min(width - used);
-        let text: String = chars[..take].iter().collect();
+        let mut start = 0usize;
+        if skipped < skip {
+            let drop = (skip - skipped).min(chars.len());
+            start = drop;
+            skipped += drop;
+            if start >= chars.len() {
+                continue; // whole span scrolled off the left edge
+            }
+        }
+        let take = (chars.len() - start).min(width - used);
+        let text: String = chars[start..start + take].iter().collect();
         let mut style = sp.style;
         if let Some(bg) = bg {
             style = style.bg(bg);

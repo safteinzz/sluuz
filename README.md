@@ -110,14 +110,15 @@ commit's diff below. The interactive sibling of `slu trace`. (The `i` prefix
 marks the interactive views, alongside `ibranch`.)
 
 Diffs are rendered side-by-side and syntax-highlighted in pure Rust (via
-`syntect`) — no external tools required.
+`syntect`) — with old/new line-number gutters and scrollbars, no external tools
+required.
 
 ```bash
 slu ilog                 # explore the current branch
 slu ilog --all -n 500    # all branches, more history
 ```
 
-Keys: `j`/`k` (or arrows) move between commits · `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`) select a file · `Ctrl-d`/`Ctrl-u` half-page scroll (vim) · `q` / `Esc` / `Ctrl-C` quit
+Keys: `j`/`k` (or arrows) move commits · `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`) select a file · `Enter` opens its diff. In the diff: `j`/`k` and `Ctrl-d`/`Ctrl-u` scroll, `h`/`l` (or `←`/`→`) pan sideways, `Esc` backs out · `q` / `Ctrl-C` quit
 
 ### `slu ibranch` — interactive branch explorer (TUI)
 
@@ -132,8 +133,8 @@ slu ibranch -a           # local and remote
 ```
 
 Keys: `j`/`k` (or arrows) move the top pane, `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`)
-the bottom pane; `Enter` drills in, `Esc` (or `Ctrl-[`) steps back one level;
-`q` / `Ctrl-C` quit.
+the bottom pane; `Enter` drills in, `Esc` (or `Ctrl-[`) steps back one level; in
+the diff, `h`/`l` (or `←`/`→`) pan sideways; `q` / `Ctrl-C` quit.
 
 ### `slu update` — update sluuz itself
 

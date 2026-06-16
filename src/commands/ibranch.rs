@@ -9,9 +9,11 @@
 
 use crate::git::git_capture;
 use crate::tui::{
-    commit_item, file_item, half_page, is_back, is_down, is_open, is_up, load_commits,
-    load_file_diff, load_files, pane_block, pane_width, pop_keyboard_enhancement,
-    push_keyboard_enhancement, Commit, FileEntry, CTRL_MOVE, MOVE, SEP,
+    clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, file_item, half_page, is_back,
+    is_down, is_left, is_open, is_right, is_up, load_commits, load_diff_raw, load_files, pane_block,
+    pane_height, pane_width, pop_keyboard_enhancement, prepare_diff, push_keyboard_enhancement,
+    list_scrollbar, render_prepared, Commit, FileEntry, RenderedDiff, CTRL_Y_MOVE, X_MOVE, Y_MOVE,
+    SEP,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -87,7 +89,9 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
     let mut files: Vec<FileEntry> = Vec::new();
     let mut file_sel = 0usize;
     let mut diff = Text::default();
+    let mut prepared = RenderedDiff::default();
     let mut diff_scroll = 0u16;
+    let mut diff_hscroll = 0u16;
 
     let mut branch_state = ListState::default();
     branch_state.select(Some(0));
@@ -123,7 +127,7 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
                 if w != width {
                     width = w;
                     if matches!(view, View::Diff) {
-                        diff = load_file_diff(&commits[commit_sel].hash, &files[file_sel].path, width);
+                        diff = render_prepared(&prepared, width, diff_hscroll);
                     }
                 }
             }
@@ -183,7 +187,10 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
                             file_sel = 0;
                             file_state.select(Some(0));
                         } else if is_open(code) && !files.is_empty() {
-                            diff = load_file_diff(&commits[commit_sel].hash, &files[file_sel].path, width);
+                            let raw = load_diff_raw(&commits[commit_sel].hash, &files[file_sel].path);
+                            prepared = prepare_diff(&raw);
+                            diff_hscroll = 0;
+                            diff = render_prepared(&prepared, width, 0);
                             diff_scroll = 0;
                             view = View::Diff;
                         } else if is_back(code) {
@@ -210,9 +217,21 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
                             diff_scroll = diff_scroll.saturating_add(1);
                         } else if is_up(code) {
                             diff_scroll = diff_scroll.saturating_sub(1);
+                        } else if is_right(code) {
+                            diff_hscroll = clamp_hscroll(
+                                diff_hscroll.saturating_add(8),
+                                prepared.max_line(),
+                                pane_width(terminal) / 2,
+                            );
+                            diff = render_prepared(&prepared, width, diff_hscroll);
+                        } else if is_left(code) {
+                            diff_hscroll = diff_hscroll.saturating_sub(8);
+                            diff = render_prepared(&prepared, width, diff_hscroll);
                         } else if is_back(code) {
                             view = View::Commit;
                         }
+                        diff_scroll =
+                            clamp_scroll(diff_scroll, diff.lines.len(), pane_height(terminal));
                     }
                 }
             }
@@ -259,36 +278,39 @@ fn draw(
         View::Branches => {
             let top = List::new(p.branches.iter().map(branch_item).collect::<Vec<_>>())
                 .block(pane_block(
-                    format!(" branches  {}/{}   {MOVE} ", p.branch_sel + 1, p.branches.len()),
+                    format!(" branches  {}/{}   {Y_MOVE} ", p.branch_sel + 1, p.branches.len()),
                     true,
                 ))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(top, areas[0], branch_state);
+            list_scrollbar(frame, areas[0], p.branches.len(), branch_state.offset());
 
             let title =
-                commits_title(p.commits, p.commit_sel, &format!("{CTRL_MOVE} select · enter open"));
+                commits_title(p.commits, p.commit_sel, &format!("{CTRL_Y_MOVE} select · enter open"));
             let bottom = List::new(p.commits.iter().map(commit_item).collect::<Vec<_>>())
                 .block(pane_block(title, true))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(bottom, areas[1], commit_state);
+            list_scrollbar(frame, areas[1], p.commits.len(), commit_state.offset());
         }
 
         // Level 2: commits on top, the commit's files on the bottom.
         View::Commit => {
-            let title = commits_title(p.commits, p.commit_sel, MOVE);
+            let title = commits_title(p.commits, p.commit_sel, Y_MOVE);
             let top = List::new(p.commits.iter().map(commit_item).collect::<Vec<_>>())
                 .block(pane_block(title, true))
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(top, areas[0], commit_state);
+            list_scrollbar(frame, areas[0], p.commits.len(), commit_state.offset());
 
             let files_title = if p.files.is_empty() {
                 " files  (none) ".to_string()
             } else {
                 format!(
-                    " files  {}/{}   {CTRL_MOVE} select · enter open · esc back ",
+                    " files  {}/{}   {CTRL_Y_MOVE} select · enter open · esc back ",
                     p.file_sel + 1,
                     p.files.len()
                 )
@@ -298,6 +320,7 @@ fn draw(
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(bottom, areas[1], file_state);
+            list_scrollbar(frame, areas[1], p.files.len(), file_state.offset());
         }
 
         // Level 3: commits on top (context), the file diff on the bottom.
@@ -308,15 +331,17 @@ fn draw(
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
                 .highlight_symbol("› ");
             frame.render_stateful_widget(top, areas[0], commit_state);
+            list_scrollbar(frame, areas[0], p.commits.len(), commit_state.offset());
 
             let path = p.files.get(p.file_sel).map(|f| f.path.as_str()).unwrap_or("");
             let view = Paragraph::new(p.diff.clone())
                 .block(pane_block(
-                    format!(" {path}   {MOVE}·ctrl-d/u scroll · esc back · q quit "),
+                    format!(" {path}   {Y_MOVE}·ctrl-d/u scroll · {X_MOVE} pan · esc back · q quit "),
                     true,
                 ))
                 .scroll((p.diff_scroll, 0));
             frame.render_widget(view, areas[1]);
+            diff_scrollbar(frame, areas[1], p.diff.lines.len(), p.diff_scroll);
         }
     }
 }
