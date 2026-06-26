@@ -20,23 +20,10 @@ mod tui;
 use clap::{Parser, Subcommand};
 use std::process::Command;
 
-/// Shown at the bottom of `slu --help` so the common invocations are visible
-/// without digging into each subcommand's help.
-const EXAMPLES: &str = "\x1b[1mExamples:\x1b[0m
-  slu commit -m \"fix\"       Plain git — passed straight through
-  slu push                   …so are push, log, rebase, diff, everything
-  slu search -r api_key      Sleuth a string across every repo, all branches
-  slu scan -t aws,token      Audit repos for custom secret terms
-  slu repos --dirty          Show only repos with uncommitted/unpushed work
-  slu sync --pull            Fetch all repos and fast-forward where safe
-  slu tidy                   List merged branches that are safe to delete
-  slu each pull --ff-only    Run any git command in every repo
-  slu trace --graph          A prettier log (git log itself is untouched)
-  slu ilog                   Interactive TUI: browse commits and their diffs
-  slu ibranch                Interactive TUI: browse branches and their commits
-  slu update                 Update sluuz itself to the latest release
-
-Run `slu <command> --help` for options specific to a superpower command.";
+/// Shown at the bottom of `slu --help`: the one thing the command list can't
+/// convey — that everything else is just git.
+const PASSTHROUGH: &str = "Anything else is real git, passed straight through: slu commit -m \"fix\", slu push, slu rebase …
+Run `slu <command> --help` for the full detail of any command.";
 
 // `derive` lets clap generate all the argument parsing boilerplate from annotations.
 #[derive(Parser)]
@@ -47,7 +34,7 @@ Run `slu <command> --help` for options specific to a superpower command.";
     bin_name = "slu",
     version,
     about = "git, but it sleuths — a git superset with cross-repo & history superpowers",
-    after_help = EXAMPLES,
+    after_help = PASSTHROUGH,
     arg_required_else_help = true
 )]
 struct Cli {
@@ -55,28 +42,57 @@ struct Cli {
     command: Cmd,
 }
 
-// Each enum variant holds its own Args struct, defined in the subcommand's module.
+// Each enum variant holds its own Args struct, defined in the subcommand's
+// module. `verbatim_doc_comment` keeps the second line (the options) on its own
+// line in `slu --help` instead of being collapsed into the description.
 #[derive(Subcommand)]
 enum Cmd {
-    /// Search git history for commits that added or removed a string
+    /// Search history for a string (pickaxe) <pattern>
+    ///   -r        search every repo under the cwd
+    ///   -l N      max commits shown per repo (20)
+    #[command(verbatim_doc_comment)]
     Search(commands::search::Args),
-    /// Scan repositories for sensitive terms (passwords, secrets, tokens)
+    /// Scan repos for sensitive terms — secrets, tokens [path]
+    ///   -t terms  custom comma-separated terms
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
     Scan(commands::scan::Args),
-    /// Show working-tree state (branch, dirty, ahead/behind) across all repos
+    /// Working-tree state across all repos [path]
+    ///   --dirty   only repos needing attention
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
     Repos(commands::repos::Args),
-    /// Fetch (and optionally fast-forward) all repos under a path in parallel
+    /// Fetch (and optionally fast-forward) all repos [path]
+    ///   --pull    fast-forward the branch where safe
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
     Sync(commands::sync::Args),
-    /// Find merged, safe-to-delete branches across all repos
+    /// Find merged, safe-to-delete branches [path]
+    ///   -a        include already-clean repos
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
     Tidy(commands::tidy::Args),
-    /// Run any git command in every repo under the current directory
+    /// Run any git command in every repo  (e.g. slu each pull --ff-only)
     Each(commands::each::Args),
-    /// A prettier history view (aligned log; --graph keeps git's graph)
+    /// A prettier history view (aligned log)
+    ///   -a        include all branches
+    ///   -g        show git's commit graph
+    ///   -n N      max commits (30)
+    #[command(verbatim_doc_comment)]
     Trace(commands::trace::Args),
-    /// Interactive log explorer (TUI) — scroll commits, view diffs
+    /// Interactive log explorer (TUI)
+    ///   -a        include all branches
+    ///   -n N      commits to load (200)
+    #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
-    /// Interactive branch explorer (TUI) — browse branches and their commits
+    /// Interactive branch explorer (TUI)
+    ///   -r        remotes only
+    ///   -a        local + remote
+    #[command(verbatim_doc_comment)]
     Ibranch(commands::ibranch::Args),
-    /// Update sluuz itself to the latest release (cargo install sluuz --force)
+    /// Update sluuz to the latest release
+    ///   -y        skip the confirmation prompt
+    #[command(verbatim_doc_comment)]
     Update(commands::update::Args),
     /// Any other command is passed straight through to git
     #[command(external_subcommand)]
