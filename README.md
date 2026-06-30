@@ -142,6 +142,32 @@ the diff, `h`/`l` (or `←`/`→`) pan sideways; `q` / `Ctrl-C` quit.
 slu update               # cargo install sluuz --force, the easy way
 ```
 
+### `slu completions` — tab-completion
+
+Because `slu` is a git superset, its completion *reuses git's own* — so
+`slu branch v<Tab>` completes a branch named `v0.2.1`, `slu checkout <Tab>` lists
+refs, and every git subcommand, alias, and flag completes exactly like `git`.
+slu's own verbs (`scan`, `ilog`, …) are added on top.
+
+The easy way — `--add` writes the loader line into your shell's rc file and is
+safe to run twice:
+
+```bash
+slu completions bash --add     # ~/.bashrc
+slu completions zsh  --add     # ~/.zshrc
+slu completions fish --add     # ~/.config/fish/config.fish
+```
+
+Then restart your shell. Prefer to wire it up yourself? Drop `--add` and
+`slu completions <shell>` just prints the script for you to source:
+
+```bash
+source <(slu completions bash)      # bash / zsh
+slu completions fish | source       # fish
+```
+
+This works in Git Bash and WSL on Windows too (both ship git's completion).
+
 ## Common options
 
 The multi-repo commands accept a `path` argument (defaults to `.`) and

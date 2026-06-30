@@ -1,3 +1,4 @@
+pub mod completions;
 pub mod each;
 pub mod ibranch;
 pub mod ilog;

@@ -11,6 +11,7 @@
 //!   slu trace              A prettier history view (does not shadow `git log`)
 //!   slu ilog               Interactive log explorer (TUI)
 //!   slu ibranch            Interactive branch explorer (TUI)
+//!   slu completions <sh>   Print a tab-completion script (reuses git's)
 
 mod commands;
 mod git;
@@ -94,6 +95,11 @@ enum Cmd {
     ///   -y        skip the confirmation prompt
     #[command(verbatim_doc_comment)]
     Update(commands::update::Args),
+    /// Print a tab-completion script <bash|zsh|fish>
+    ///   --add     append the loader to your shell's rc file for you
+    ///   reuses git's own completion (branches, refs, flags)
+    #[command(verbatim_doc_comment)]
+    Completions(commands::completions::Args),
     /// Any other command is passed straight through to git
     #[command(external_subcommand)]
     Git(Vec<String>),
@@ -113,6 +119,7 @@ fn main() {
         Cmd::Ilog(args) => commands::ilog::run(args),
         Cmd::Ibranch(args) => commands::ibranch::run(args),
         Cmd::Update(args) => commands::update::run(args),
+        Cmd::Completions(args) => commands::completions::run(args),
         Cmd::Git(args) => passthrough(&args),
     }
 }
