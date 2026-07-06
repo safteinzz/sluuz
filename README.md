@@ -82,14 +82,30 @@ slu sync                 # fetch + prune all repos
 slu sync --pull          # also fast-forward the current branch where safe
 ```
 
-### `slu tidy` — find merged, deletable branches
+### `slu tidy` — find finished branches to delete
 
-Lists local branches already merged into your current branch (safe to delete),
-with how long since each was last touched and a ready-to-paste delete command.
+Lists local branches whose **upstream is gone** — the remote branch they tracked
+was deleted (e.g. a merged PR the remote auto-deleted) — across every repo, with
+how long since each was last touched and a ready-to-paste delete command.
+Branches still alive on the remote, or that never had an upstream, are left
+alone.
 
 ```bash
 slu tidy                 # repos with cleanup to do
 slu tidy --all           # include repos with nothing to clean up
+```
+
+### `slu itidy` — interactively delete finished branches (TUI)
+
+The interactive sibling of `slu tidy`, for the current repo: it lists the same
+gone-upstream branches, and you delete them in place. Move with `j`/`k` (or
+arrows), press `Enter` for a Yes/No confirm (defaults to **No**), toggle with
+`←`/`→` (or `h`/`l`), and `Enter` again to act — `y`/`n` are shortcuts. Deletes
+are `git branch -D` (force), since a squash/rebase-merged branch often isn't seen
+as locally merged.
+
+```bash
+slu itidy                # tidy the current repo, interactively
 ```
 
 ### `slu each` — run any git command across all repos

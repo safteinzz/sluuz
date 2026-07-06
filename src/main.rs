@@ -11,6 +11,7 @@
 //!   slu trace              A prettier history view (does not shadow `git log`)
 //!   slu ilog               Interactive log explorer (TUI)
 //!   slu ibranch            Interactive branch explorer (TUI)
+//!   slu itidy              Interactively delete branches with a gone upstream
 //!   slu completions <sh>   Print a tab-completion script (reuses git's)
 
 mod commands;
@@ -73,6 +74,10 @@ enum Cmd {
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Tidy(commands::tidy::Args),
+    /// Interactively delete branches whose upstream is gone (TUI)
+    ///   this repo · enter → confirm popup → enter deletes
+    #[command(verbatim_doc_comment)]
+    Itidy(commands::itidy::Args),
     /// Run any git command in every repo  (e.g. slu each pull --ff-only)
     Each(commands::each::Args),
     /// A prettier history view (aligned log)
@@ -114,6 +119,7 @@ fn main() {
         Cmd::Repos(args) => commands::repos::run(args),
         Cmd::Sync(args) => commands::sync::run(args),
         Cmd::Tidy(args) => commands::tidy::run(args),
+        Cmd::Itidy(args) => commands::itidy::run(args),
         Cmd::Each(args) => commands::each::run(args),
         Cmd::Trace(args) => commands::trace::run(args),
         Cmd::Ilog(args) => commands::ilog::run(args),

@@ -1,10 +1,14 @@
-//! `slu tidy` — find local branches that are already merged (safe to delete)
-//! across every repo under a path, with how long since each was last touched.
+//! `slu tidy` — find local branches whose upstream is **gone** (the remote
+//! branch they tracked was deleted) across every repo under a path, with how
+//! long since each was last touched.
 //!
-//! "Merged" means merged into the current branch (`git branch --merged`), so
-//! these are branches whose work is already in your checked-out line of history.
+//! These are the genuinely-finished branches — e.g. a merged PR the remote
+//! auto-deleted — the same set `slu itidy` offers to delete interactively.
+//! Branches still alive on the remote, or that never had an upstream, are left
+//! alone. This is the non-interactive, multi-repo view; `slu itidy` is the TUI.
 
 use crate::git::{display_name, find_repos, git_capture};
+use crate::tui::SEP;
 use colored::Colorize;
 use std::path::PathBuf;
 
@@ -43,7 +47,7 @@ pub fn run(args: Args) {
         let current = git_capture(repo_str, &["rev-parse", "--abbrev-ref", "HEAD"])
             .unwrap_or_else(|| "HEAD".to_string());
 
-        let merged = merged_branches(repo_str, &current);
+        let merged = gone_branches(repo_str, &current);
 
         if merged.is_empty() {
             if args.all {
@@ -64,7 +68,7 @@ pub fn run(args: Args) {
             format!("📁 {}", name).bold(),
             format!("(on {})", current).dimmed()
         );
-        println!("   {}", "merged, safe to delete:".dimmed());
+        println!("   {}", "upstream gone — safe to delete:".dimmed());
 
         let width = merged.iter().map(|b| b.name.len()).max().unwrap_or(0);
         for b in &merged {
@@ -84,7 +88,7 @@ pub fn run(args: Args) {
     }
 
     if total_branches == 0 {
-        println!("{}", "No merged branches to clean up.".green());
+        println!("{}", "No branches with a gone upstream to clean up.".green());
     } else {
         println!(
             "{}",
@@ -97,24 +101,36 @@ pub fn run(args: Args) {
     }
 }
 
-/// Local branches merged into `current`, excluding `current` itself, each with
-/// a relative "last commit" age.
-fn merged_branches(repo: &str, current: &str) -> Vec<Branch> {
-    // `--format` must precede `--merged`: `--merged` takes an optional commit
-    // argument, so `--merged --format=…` would swallow the format as that commit.
-    let out = git_capture(repo, &["branch", "--format=%(refname:short)", "--merged"])
-        .unwrap_or_default();
-
-    out.lines()
-        .map(str::trim)
-        .filter(|b| !b.is_empty() && *b != current)
-        .map(|b| {
-            let age = git_capture(repo, &["log", "-1", "--format=%cr", b])
-                .unwrap_or_else(|| "unknown".to_string());
-            Branch {
-                name: b.to_string(),
-                age,
-            }
+/// Local branches whose upstream is gone (the remote branch they tracked was
+/// deleted), excluding the checked-out `current` branch, each with a relative
+/// "last commit" age. Same detection as `slu itidy`.
+///
+/// `%(refname)` is stripped to the plain branch name ourselves — `%(refname:short)`
+/// would return `heads/v0.2.20` when a tag of the same name exists, which
+/// `git branch -d` can't take.
+fn gone_branches(repo: &str, current: &str) -> Vec<Branch> {
+    let fmt = format!("--format=%(refname){SEP}%(upstream:track){SEP}%(committerdate:relative)");
+    git_capture(repo, &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads"])
+        .map(|out| {
+            out.lines()
+                .filter_map(|line| {
+                    let mut f = line.split(SEP);
+                    let refname = f.next()?;
+                    let track = f.next()?;
+                    // `[gone]` marks a tracking branch whose remote was deleted.
+                    if !track.contains("gone") {
+                        return None;
+                    }
+                    let name = refname.strip_prefix("refs/heads/").unwrap_or(refname);
+                    if name == current {
+                        return None; // can't delete the checked-out branch
+                    }
+                    Some(Branch {
+                        name: name.to_string(),
+                        age: f.next().unwrap_or("").to_string(),
+                    })
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
