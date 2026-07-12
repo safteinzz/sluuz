@@ -119,11 +119,25 @@ slu each switch main
 slu each "log --oneline -1"
 ```
 
+## The interactive views (`i*`) and their keys
+
+`ilog`, `ibranch`, `istatus` and `itidy` are the interactive TUIs. They all share
+one rule, so the keys never surprise you:
+
+- **Plain keys drive the top pane** — `j`/`k` (or `↑`/`↓`) move, `h`/`l` (or
+  `←`/`→`) move horizontally.
+- **`Ctrl` + the same keys drive the diff** — `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`)
+  and `Ctrl-d`/`Ctrl-u` scroll it; `Ctrl-←`/`Ctrl-→` (or `Ctrl-h`/`Ctrl-l`) pan it
+  sideways.
+- **`Enter` opens / drills in** — and on a diff it hands the file to your
+  configured **`git difftool`** (vimdiff, meld, VS Code…), suspending the TUI
+  until you close it. If you have no `diff.tool` set, it says so instead.
+- **`Esc`** (or `Ctrl-[`) steps back · **`q`** / `Ctrl-C` quit.
+
 ### `slu ilog` — interactive log explorer (TUI)
 
 Opens a full-screen browser: scroll the commit list up top, see the selected
-commit's diff below. The interactive sibling of `slu trace`. (The `i` prefix
-marks the interactive views, alongside `ibranch`.)
+commit's diff below. The interactive sibling of `slu trace`.
 
 Diffs are rendered side-by-side and syntax-highlighted in pure Rust (via
 `syntect`) — with old/new line-number gutters and scrollbars, no external tools
@@ -134,7 +148,8 @@ slu ilog                 # explore the current branch
 slu ilog --all -n 500    # all branches, more history
 ```
 
-Keys: `j`/`k` (or arrows) move commits · `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`) select a file · `Enter` opens its diff. In the diff: `j`/`k` and `Ctrl-d`/`Ctrl-u` scroll, `h`/`l` (or `←`/`→`) pan sideways, `Esc` backs out · `q` / `Ctrl-C` quit
+Keys: `j`/`k` move commits · `Ctrl-↑`/`Ctrl-↓` select a file · `Enter` opens its
+diff (and `Enter` again opens it in your difftool).
 
 ### `slu ibranch` — interactive branch explorer (TUI)
 
@@ -148,9 +163,25 @@ slu ibranch -r           # remote-tracking branches only (like git branch -r)
 slu ibranch -a           # local and remote
 ```
 
-Keys: `j`/`k` (or arrows) move the top pane, `Ctrl-↑`/`Ctrl-↓` (or `Ctrl-j`/`Ctrl-k`)
-the bottom pane; `Enter` drills in, `Esc` (or `Ctrl-[`) steps back one level; in
-the diff, `h`/`l` (or `←`/`→`) pan sideways; `q` / `Ctrl-C` quit.
+Keys: `j`/`k` move the top pane, `Ctrl-↑`/`Ctrl-↓` the bottom one; `Enter` drills
+in one level, `Esc` steps back.
+
+### `slu istatus` — interactive git status (TUI)
+
+`git status` you can act on. The changed files sit up top, the selected file's
+diff below. Stage and unstage in place, and slide `h`/`l` (or `←`/`→`) to filter
+the list between **staged**, **all**, and **unstaged**.
+
+```bash
+slu istatus              # the current repo (works from any subdirectory)
+```
+
+Keys: `j`/`k` move files · `h`/`l` change scope · `s` stage · `u` unstage ·
+`Space` toggle · `r` refresh · `Enter` opens the file in your difftool
+(comparing exactly what the pane shows — worktree, or `--cached` when staged).
+
+The two-column code is git's own: **left = staged** (green), **right = unstaged**
+(red). So `M ` is staged, ` M` is unstaged, `MM` is both, `??` is untracked.
 
 ### `slu update` — update sluuz itself
 

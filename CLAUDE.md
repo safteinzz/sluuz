@@ -20,17 +20,20 @@ License: AGPL-3.0-only. Crate name `sluuz`, binary name `slu`.
 - `src/main.rs` — clap `Cli`/`Cmd`, dispatch, `passthrough()` to git, top-level
   `--help` text (per-command options listed one-per-line via `verbatim_doc_comment`).
 - `src/commands/*.rs` — one module per superpower verb: `search`, `scan`, `repos`,
-  `sync`, `tidy`, `each`, `trace`, `ilog`, `ibranch`, `update`.
+  `sync`, `tidy`, `each`, `trace`, `update`, `completions`, and the interactive
+  TUIs `ilog`, `ibranch`, `istatus`, `itidy`.
 - `src/git.rs` — repo discovery (`find_repos`), `display_name`, `git_capture`/`git_run`.
 - `src/history.rs` — pickaxe search (`git log -S`) and branch lookup.
-- `src/tui.rs` — shared TUI building blocks for `ilog`/`ibranch`: diff parsing +
-  syntect highlighting, scrollbars, key predicates, hint-label consts.
+- `src/tui.rs` — shared TUI building blocks: diff parsing + syntect highlighting,
+  scrollbars, key predicates, hint-label consts, and `run_difftool`/`difftool_commit`
+  (suspend the TUI → run `git difftool` → re-enter).
 
 ## Build / test / lint
 - Build: `cargo build` (debug) / `cargo build --release`.
 - Lint: `cargo clippy` — keep it warning-clean before any release.
 - Run the dev binary directly: `./target/debug/slu <cmd>` (there is no dev.sh).
-- No automated tests currently.
+- No automated tests. Scratch test repos go in `test-playground/` (gitignored) —
+  build them there and leave them for the user to poke at.
 
 ## Release workflow (always, in order)
 change → `cargo clippy` → bump `version` in `Cargo.toml` → `cargo build --release`
@@ -41,11 +44,17 @@ change → `cargo clippy` → bump `version` in `Cargo.toml` → `cargo build --
 - Commits: short conventional-tag messages (`feat:`, `fix:`, …). **Never** add
   co-author / `Co-Authored-By` trailers.
 - **Never shadow a real git command.** Enhanced views get distinct verbs
-  (`trace`, not `log`; `ilog`/`ibranch` for interactive). Passthrough must stay intact.
+  (`trace`, not `log`; the `i` prefix for interactive: `ilog`/`ibranch`/`istatus`/
+  `itidy`). Passthrough must stay intact.
 - Fix the root cause; call out any workaround explicitly as such.
-- TUI key parity: `j/k` ≡ arrows; `Ctrl-j/k` ≡ `Ctrl-↑/↓`; `Esc` = back,
-  `Enter` = open; `h/l`/`←/→` = horizontal pan in the diff. Hint labels come from
-  the `Y_MOVE`/`CTRL_Y_MOVE`/`X_MOVE`/`CTRL_X_MOVE` consts in `tui.rs`.
+- **TUI key rule — plain = top pane, Ctrl = the diff.** `j/k` ≡ `↑/↓` and `h/l` ≡
+  `←/→` navigate the top pane; `Ctrl-j/k` ≡ `Ctrl-↑/↓` (+ `Ctrl-d/u`) scroll the
+  diff and `Ctrl-h/l` ≡ `Ctrl-←/→` pan it. `Esc` = back, `Enter` = open/drill in
+  (on a diff: open the user's `git difftool`). Hint labels come from the
+  `Y_MOVE`/`CTRL_Y_MOVE`/`X_MOVE`/`CTRL_X_MOVE` consts in `tui.rs`.
+- Run git from the **repo root** (`git rev-parse --show-toplevel`) when acting on
+  paths: `git status` reports root-relative paths, so running diff/add from a
+  subdirectory fails to resolve them.
 
 ## Gotchas
 - Stale debug binary: `cargo build` sometimes doesn't pick up changes — run
@@ -56,3 +65,9 @@ change → `cargo clippy` → bump `version` in `Cargo.toml` → `cargo build --
   overwrites it.
 - VS Code's integrated terminal can't distinguish `Ctrl-J` from Enter on any OS;
   the fix is a user `keybindings.json` remap to `Ctrl-Down` (see README Troubleshooting).
+- The kitty protocol we push (DISAMBIGUATE_ESCAPE_CODES) makes `Ctrl-[` a distinct
+  key instead of ESC — `norm_esc()` in `tui.rs` folds it back to `Esc` (vim parity).
+- `git difftool` needs the terminal: suspend the TUI (pop kitty flags →
+  `ratatui::restore()`), run it, then `ratatui::init()` + re-push. Check
+  `diff.tool`/`merge.tool` first so an unconfigured user gets a message, not a
+  torn-down screen.

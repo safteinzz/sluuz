@@ -15,6 +15,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::{DefaultTerminal, Frame};
 use std::io::stdout;
+use std::process::Command;
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Style as SynStyle, Theme, ThemeSet};
@@ -31,7 +32,6 @@ pub const SEP: char = '\u{1f}';
 pub const Y_MOVE: &str = "↑↓/jk";
 pub const CTRL_Y_MOVE: &str = "ctrl-↑↓/jk";
 pub const X_MOVE: &str = "←→/hl";
-#[allow(dead_code)] // reserved for a future Ctrl-pan binding
 pub const CTRL_X_MOVE: &str = "ctrl-←→/hl";
 
 /// Tint for changed cells (left = removed, right = added).
@@ -57,6 +57,87 @@ pub fn push_keyboard_enhancement() -> bool {
 
 pub fn pop_keyboard_enhancement() {
     let _ = stdout().execute(PopKeyboardEnhancementFlags);
+}
+
+// ── external difftool ────────────────────────────────────────────────────────
+
+/// git's magic empty-tree hash — the "before" side for a root commit that has no
+/// parent to diff against.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// Is a difftool configured? `git difftool` uses `diff.tool`, falling back to
+/// `merge.tool`. We check up front so that, if neither is set, we can show a
+/// helpful message instead of tearing down the TUI only for git to error out.
+fn has_difftool(dir: &str) -> bool {
+    ["diff.tool", "merge.tool"]
+        .iter()
+        .any(|k| git_capture(dir, &["config", k]).is_some_and(|v| !v.is_empty()))
+}
+
+/// Open one commit's file in the user's difftool, comparing it against its first
+/// parent (or the empty tree for a root commit) — mirroring what `git show`
+/// displays. Returns a status line for the caller to surface.
+pub fn difftool_commit(
+    terminal: &mut DefaultTerminal,
+    enhanced: bool,
+    dir: &str,
+    hash: &str,
+    path: &str,
+) -> String {
+    let base = if commit_has_parent(dir, hash) {
+        format!("{hash}^")
+    } else {
+        EMPTY_TREE.to_string()
+    };
+    run_difftool(terminal, enhanced, dir, &[&base, hash, "--", path])
+}
+
+fn commit_has_parent(dir: &str, hash: &str) -> bool {
+    git_capture(dir, &["rev-list", "--parents", "-n", "1", hash])
+        .map(|s| s.split_whitespace().count() > 1)
+        .unwrap_or(false)
+}
+
+/// Suspend the TUI, run `git -C <dir> difftool -y <args>` with the terminal
+/// handed over (so a terminal tool like vimdiff works), then re-enter. Bails
+/// cleanly — no screen flicker — when no difftool is configured. Returns "" on
+/// success, else a short message to show the user.
+pub fn run_difftool(
+    terminal: &mut DefaultTerminal,
+    enhanced: bool,
+    dir: &str,
+    args: &[&str],
+) -> String {
+    if !has_difftool(dir) {
+        return "no difftool set — configure one: git config --global diff.tool <tool>".to_string();
+    }
+
+    // Hand the terminal back to the external tool.
+    if enhanced {
+        pop_keyboard_enhancement();
+    }
+    ratatui::restore();
+
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .arg("difftool")
+        .arg("-y")
+        .args(args)
+        .status();
+
+    // Re-enter the TUI exactly as run() first set it up.
+    *terminal = ratatui::init();
+    if enhanced {
+        push_keyboard_enhancement();
+    }
+    let _ = terminal.clear();
+
+    match status {
+        Ok(s) if s.success() => String::new(),
+        Ok(_) => "difftool exited with an error".to_string(),
+        Err(e) => format!("could not launch difftool: {e}"),
+    }
 }
 
 pub struct Commit {
@@ -195,6 +276,18 @@ pub fn is_left(c: KeyCode) -> bool {
 /// Pan right = l or →.
 pub fn is_right(c: KeyCode) -> bool {
     matches!(c, KeyCode::Char('l') | KeyCode::Right)
+}
+
+/// Fold Ctrl+[ back into Esc. Terminals send Ctrl+[ as the raw ESC byte, but the
+/// kitty protocol we push (DISAMBIGUATE_ESCAPE_CODES) turns it into a distinct
+/// Ctrl+[ event — so map it back, since Ctrl+[ is Esc in vim muscle memory. Call
+/// it once per key event before matching.
+pub fn norm_esc(code: KeyCode, ctrl: bool) -> KeyCode {
+    if ctrl && matches!(code, KeyCode::Char('[')) {
+        KeyCode::Esc
+    } else {
+        code
+    }
 }
 
 pub fn pane_width(terminal: &DefaultTerminal) -> u16 {

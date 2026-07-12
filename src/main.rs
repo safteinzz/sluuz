@@ -11,6 +11,7 @@
 //!   slu trace              A prettier history view (does not shadow `git log`)
 //!   slu ilog               Interactive log explorer (TUI)
 //!   slu ibranch            Interactive branch explorer (TUI)
+//!   slu istatus            Interactive git status — stage/unstage + diffs
 //!   slu itidy              Interactively delete branches with a gone upstream
 //!   slu completions <sh>   Print a tab-completion script (reuses git's)
 
@@ -96,6 +97,10 @@ enum Cmd {
     ///   -a        local + remote
     #[command(verbatim_doc_comment)]
     Ibranch(commands::ibranch::Args),
+    /// Interactive git status — stage/unstage + diffs (TUI)
+    ///   this repo · ←→/hl scope · s/u/space stage
+    #[command(verbatim_doc_comment)]
+    Istatus(commands::istatus::Args),
     /// Update sluuz to the latest release
     ///   -y        skip the confirmation prompt
     #[command(verbatim_doc_comment)]
@@ -124,6 +129,7 @@ fn main() {
         Cmd::Trace(args) => commands::trace::run(args),
         Cmd::Ilog(args) => commands::ilog::run(args),
         Cmd::Ibranch(args) => commands::ibranch::run(args),
+        Cmd::Istatus(args) => commands::istatus::run(args),
         Cmd::Update(args) => commands::update::run(args),
         Cmd::Completions(args) => commands::completions::run(args),
         Cmd::Git(args) => passthrough(&args),

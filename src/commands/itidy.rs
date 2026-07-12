@@ -16,7 +16,7 @@
 
 use crate::git::{git_capture, git_run};
 use crate::tui::{
-    is_back, is_down, is_left, is_right, is_up, list_scrollbar, pane_block,
+    is_back, is_down, is_left, is_right, is_up, list_scrollbar, norm_esc, pane_block,
     pop_keyboard_enhancement, push_keyboard_enhancement, X_MOVE, Y_MOVE, SEP,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -78,7 +78,7 @@ fn event_loop(terminal: &mut DefaultTerminal, mut branches: Vec<Gone>) -> io::Re
             continue;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let code = key.code;
+        let code = norm_esc(key.code, ctrl);
 
         // Ctrl-C always quits, even with the popup open.
         if ctrl && code == KeyCode::Char('c') {

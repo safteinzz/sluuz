@@ -9,11 +9,11 @@
 
 use crate::git::git_capture;
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, file_item, half_page, is_back,
-    is_down, is_left, is_open, is_right, is_up, load_commits, load_diff_raw, load_files, pane_block,
-    pane_height, pane_width, pop_keyboard_enhancement, prepare_diff, push_keyboard_enhancement,
-    list_scrollbar, render_prepared, Commit, FileEntry, RenderedDiff, CTRL_Y_MOVE, X_MOVE, Y_MOVE,
-    SEP,
+    clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, difftool_commit, file_item,
+    half_page, is_back, is_down, is_left, is_open, is_right, is_up, load_commits, load_diff_raw,
+    load_files, norm_esc, pane_block, pane_height, pane_width, pop_keyboard_enhancement,
+    prepare_diff, push_keyboard_enhancement, list_scrollbar, render_prepared, Commit, FileEntry,
+    RenderedDiff, CTRL_X_MOVE, CTRL_Y_MOVE, Y_MOVE, SEP,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -68,7 +68,7 @@ pub fn run(args: Args) {
 
     let mut terminal = ratatui::init();
     let enhanced = push_keyboard_enhancement();
-    let result = event_loop(&mut terminal, &branches);
+    let result = event_loop(&mut terminal, &branches, enhanced);
     if enhanced {
         pop_keyboard_enhancement();
     }
@@ -79,9 +79,10 @@ pub fn run(args: Args) {
     }
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result<()> {
+fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch], enhanced: bool) -> io::Result<()> {
     let mut width = pane_width(terminal);
     let mut view = View::Branches;
+    let mut msg: Option<String> = None; // transient status (e.g. difftool result)
 
     let mut branch_sel = 0usize;
     let mut commits: Vec<Commit> = load_commits(&[branches[0].name.as_str()], COMMITS_PER_BRANCH);
@@ -114,6 +115,7 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
                     diff: &diff,
                     diff_scroll,
                     view: &view,
+                    msg: msg.as_deref(),
                 },
                 &mut branch_state,
                 &mut commit_state,
@@ -133,7 +135,8 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
             }
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                let code = key.code;
+                let code = norm_esc(key.code, ctrl);
+                msg = None; // any keypress clears a stale status message
 
                 if matches!(code, KeyCode::Char('q')) || (ctrl && code == KeyCode::Char('c')) {
                     break;
@@ -213,20 +216,28 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch]) -> io::Result
                             diff_scroll = diff_scroll.saturating_add(10);
                         } else if code == KeyCode::PageUp {
                             diff_scroll = diff_scroll.saturating_sub(10);
-                        } else if is_down(code) {
-                            diff_scroll = diff_scroll.saturating_add(1);
-                        } else if is_up(code) {
-                            diff_scroll = diff_scroll.saturating_sub(1);
-                        } else if is_right(code) {
+                        } else if ctrl && is_right(code) {
                             diff_hscroll = clamp_hscroll(
                                 diff_hscroll.saturating_add(8),
                                 prepared.max_line(),
                                 pane_width(terminal) / 2,
                             );
                             diff = render_prepared(&prepared, width, diff_hscroll);
-                        } else if is_left(code) {
+                        } else if ctrl && is_left(code) {
                             diff_hscroll = diff_hscroll.saturating_sub(8);
                             diff = render_prepared(&prepared, width, diff_hscroll);
+                        } else if is_open(code) {
+                            let m = difftool_commit(
+                                terminal,
+                                enhanced,
+                                ".",
+                                &commits[commit_sel].hash,
+                                &files[file_sel].path,
+                            );
+                            width = pane_width(terminal);
+                            if !m.is_empty() {
+                                msg = Some(m);
+                            }
                         } else if is_back(code) {
                             view = View::Commit;
                         }
@@ -261,6 +272,7 @@ struct Panes<'a> {
     diff: &'a Text<'static>,
     diff_scroll: u16,
     view: &'a View,
+    msg: Option<&'a str>,
 }
 
 fn draw(
@@ -334,11 +346,14 @@ fn draw(
             list_scrollbar(frame, areas[0], p.commits.len(), commit_state.offset());
 
             let path = p.files.get(p.file_sel).map(|f| f.path.as_str()).unwrap_or("");
+            let title = match p.msg {
+                Some(m) => format!(" {path}   ⚠ {m} "),
+                None => format!(
+                    " {path}   enter difftool · {CTRL_Y_MOVE}·ctrl-d/u scroll · {CTRL_X_MOVE} pan · esc back · q quit "
+                ),
+            };
             let view = Paragraph::new(p.diff.clone())
-                .block(pane_block(
-                    format!(" {path}   {Y_MOVE}·ctrl-d/u scroll · {X_MOVE} pan · esc back · q quit "),
-                    true,
-                ))
+                .block(pane_block(title, true))
                 .scroll((p.diff_scroll, 0));
             frame.render_widget(view, areas[1]);
             diff_scrollbar(frame, areas[1], p.diff.lines.len(), p.diff_scroll);
