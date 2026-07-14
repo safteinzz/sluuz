@@ -1,73 +1,84 @@
 # CLAUDE.md
 
-## Overview
-`sluuz` is a Rust CLI published on crates.io that acts as a **git superset**: the
-binary is `slu` (a 3-letter stand-in for `git`). Any command git understands is
-passed straight through to real git; on top of that `slu` adds cross-repo
-management, history/secret search, a prettier log, and interactive TUI explorers.
-License: AGPL-3.0-only. Crate name `sluuz`, binary name `slu`.
+## Hard rules
+- **Release workflow — always, in this exact order:** `cargo clippy` → bump
+  `version` in `Cargo.toml` → `cargo build --release` → `git commit` → `git push`
+  → `cargo publish` → `git tag -a vX.Y.Z -m "…"` → `git push origin vX.Y.Z`.
+  Every published version has a matching `vX.Y.Z` tag; skipping the tag leaves
+  crates.io and the repo out of sync.
+- **Commit, push, and publish only when the user says to ship.** They test
+  interactively first and have rejected premature commits.
+- Commit messages: short conventional tags (`feat:`, `fix:`, …). **Never** add a
+  `Co-Authored-By` trailer — the user has asked for this repeatedly.
+- **Never shadow a real git command** — passthrough is the whole premise, so an
+  enhanced view always gets a distinct verb (`trace`, not `log`; the `i` prefix
+  for interactive: `ilog`/`ibranch`/`istatus`/`itidy`).
+- Fix the root cause. If you must ship a workaround, say the word "workaround"
+  out loud — silently papering over a bug has been called out before.
+- Scratch/test git repos go in `test-playground/` (gitignored). Build them there
+  and **leave them** — the user opens them to test the TUIs by hand.
 
-## Tech stack
-- Rust 2021 edition.
-- `clap` (derive) with `external_subcommand` for git passthrough.
-- `ratatui` 0.29 + `crossterm` 0.28 for the TUIs.
-- `syntect` with `default-features=false, features=["default-fancy"]` — pure-Rust
-  regex backend (no C/oniguruma) so diffs highlight cleanly on Windows.
-- `rayon` (parallel multi-repo ops), `walkdir` (repo discovery), `colored`,
-  `terminal_size`.
+## Invariants and gotchas
+- **When editing TUI keys — plain = top pane, Ctrl = the diff.** `j/k`≡`↑/↓` and
+  `h/l`≡`←/→` drive the top pane; `Ctrl-j/k`≡`Ctrl-↑/↓` (+`Ctrl-d/u`) scroll the
+  diff and `Ctrl-h/l`≡`Ctrl-←/→` pan it. `Esc` = back, `Enter` = open/drill in
+  (on a diff: the user's `git difftool`). Hint labels come from the
+  `Y_MOVE`/`CTRL_Y_MOVE`/`X_MOVE`/`CTRL_X_MOVE` consts in `tui.rs` — never
+  hand-write a key hint.
+- **When parsing git output where leading whitespace is significant** (notably
+  `git status --porcelain`, whose first column is a space for unstaged files),
+  use `git_capture_raw`, not `git_capture`: the latter `.trim()`s, which ate the
+  leading space of the first record and shifted the whole line ("Cargo.lock" →
+  "argo.lock").
+- **When running git against paths from `git status`, run it from the repo root**
+  (`git rev-parse --show-toplevel`): status reports root-relative paths, so a
+  diff/add issued from a subdirectory fails with "Could not access '<path>'".
+- **When a TUI shells out to an interactive program** (e.g. `git difftool`), you
+  must suspend it: pop the kitty flags → `ratatui::restore()` → run →
+  `ratatui::init()` → re-push. Check `diff.tool`/`merge.tool` *first*, so an
+  unconfigured user gets a message instead of a torn-down screen. See
+  `run_difftool` in `tui.rs`.
+- **When handling `Esc`:** the kitty protocol we push (DISAMBIGUATE_ESCAPE_CODES)
+  turns `Ctrl-[` into a distinct key instead of the ESC byte. `norm_esc()` in
+  `tui.rs` folds it back — call it on every key event, or vim users lose `Ctrl-[`.
+- **When the diff view feels laggy:** highlight ONCE with `prepare_diff` (syntect
+  is the expensive part), then `render_prepared` re-lays-out per scroll/pan.
+  Never re-highlight on a keypress.
+- **When deciding which branches are safe to delete** (`tidy`/`itidy`): use
+  "upstream gone" (`%(upstream:track)` contains `[gone]`), never `git branch
+  --merged` — merged-into-HEAD wrongly lists `main` and release branches that are
+  still alive on the remote.
+- **When reading a branch name to feed `git branch -d`:** take `%(refname)` and
+  strip `refs/heads/`. `%(refname:short)` returns `heads/v1.2.3` when a tag shares
+  the name, which `git branch -d` then rejects.
+- **When behavior doesn't match the code you just wrote:** the debug binary is
+  stale. `cargo clean -p sluuz`, then rebuild. This has bitten us more than once.
+- `syntect` is pinned to `default-features=false` + `default-fancy` — the pure-Rust
+  regex backend, so there's no C/oniguruma and it builds on Windows. Don't "fix"
+  the feature flags.
+- `slu completions` delegates to git's own completion (that's the only way branch
+  names complete). git's completion is **lazy-loaded**, and completing `slu` never
+  trips that loader — so the emitted script force-loads it.
+- `slu update` on Windows renames the running `slu.exe` aside first: Windows
+  cannot overwrite a running binary.
+- VS Code's integrated terminal cannot distinguish `Ctrl-J` from `Enter` on any
+  OS (not just Windows). The fix is a user `keybindings.json` remap to `Ctrl-Down`
+  — see README Troubleshooting; there is no code-side fix.
 
-## Layout
-- `src/main.rs` — clap `Cli`/`Cmd`, dispatch, `passthrough()` to git, top-level
-  `--help` text (per-command options listed one-per-line via `verbatim_doc_comment`).
-- `src/commands/*.rs` — one module per superpower verb: `search`, `scan`, `repos`,
-  `sync`, `tidy`, `each`, `trace`, `update`, `completions`, and the interactive
-  TUIs `ilog`, `ibranch`, `istatus`, `itidy`.
-- `src/git.rs` — repo discovery (`find_repos`), `display_name`, `git_capture`/`git_run`.
-- `src/history.rs` — pickaxe search (`git log -S`) and branch lookup.
-- `src/tui.rs` — shared TUI building blocks: diff parsing + syntect highlighting,
-  scrollbars, key predicates, hint-label consts, and `run_difftool`/`difftool_commit`
-  (suspend the TUI → run `git difftool` → re-enter).
-
-## Build / test / lint
-- Build: `cargo build` (debug) / `cargo build --release`.
-- Lint: `cargo clippy` — keep it warning-clean before any release.
+## Build / lint
+- `cargo build` (debug) · `cargo build --release`
+- `cargo clippy` — must be warning-clean before any release.
 - Run the dev binary directly: `./target/debug/slu <cmd>` (there is no dev.sh).
-- No automated tests. Scratch test repos go in `test-playground/` (gitignored) —
-  build them there and leave them for the user to poke at.
+- There are no automated tests; verify by building and driving the binary.
 
-## Release workflow (always, in order)
-change → `cargo clippy` → bump `version` in `Cargo.toml` → `cargo build --release`
-→ `git commit` → `git push` → `cargo publish` → `git tag -a vX.Y.Z -m "…"` →
-`git push origin vX.Y.Z`. Every published version gets a matching `vX.Y.Z` tag.
+## Overview
+`sluuz` is a Rust CLI on crates.io that is a **git superset**: the binary is `slu`
+(a 3-letter stand-in for `git`). Anything git understands is passed straight
+through to real git; on top, `slu` adds cross-repo management, history/secret
+search, a prettier log, and interactive TUIs. Crate `sluuz`, binary `slu`,
+AGPL-3.0-only. `src/main.rs` holds the clap `Cmd` enum + `passthrough()`;
+`src/tui.rs` holds everything shared by the interactive views.
 
-## Conventions
-- Commits: short conventional-tag messages (`feat:`, `fix:`, …). **Never** add
-  co-author / `Co-Authored-By` trailers.
-- **Never shadow a real git command.** Enhanced views get distinct verbs
-  (`trace`, not `log`; the `i` prefix for interactive: `ilog`/`ibranch`/`istatus`/
-  `itidy`). Passthrough must stay intact.
-- Fix the root cause; call out any workaround explicitly as such.
-- **TUI key rule — plain = top pane, Ctrl = the diff.** `j/k` ≡ `↑/↓` and `h/l` ≡
-  `←/→` navigate the top pane; `Ctrl-j/k` ≡ `Ctrl-↑/↓` (+ `Ctrl-d/u`) scroll the
-  diff and `Ctrl-h/l` ≡ `Ctrl-←/→` pan it. `Esc` = back, `Enter` = open/drill in
-  (on a diff: open the user's `git difftool`). Hint labels come from the
-  `Y_MOVE`/`CTRL_Y_MOVE`/`X_MOVE`/`CTRL_X_MOVE` consts in `tui.rs`.
-- Run git from the **repo root** (`git rev-parse --show-toplevel`) when acting on
-  paths: `git status` reports root-relative paths, so running diff/add from a
-  subdirectory fails to resolve them.
-
-## Gotchas
-- Stale debug binary: `cargo build` sometimes doesn't pick up changes — run
-  `cargo clean -p sluuz` then rebuild when behavior seems wrong.
-- Diff TUI perf: highlight ONCE via `prepare_diff` (expensive syntect), then
-  `render_prepared` re-lays-out per scroll/pan cheaply. Don't re-highlight on keypress.
-- `slu` self-update on Windows renames the running `slu.exe` aside before cargo
-  overwrites it.
-- VS Code's integrated terminal can't distinguish `Ctrl-J` from Enter on any OS;
-  the fix is a user `keybindings.json` remap to `Ctrl-Down` (see README Troubleshooting).
-- The kitty protocol we push (DISAMBIGUATE_ESCAPE_CODES) makes `Ctrl-[` a distinct
-  key instead of ESC — `norm_esc()` in `tui.rs` folds it back to `Esc` (vim parity).
-- `git difftool` needs the terminal: suspend the TUI (pop kitty flags →
-  `ratatui::restore()`), run it, then `ratatui::init()` + re-push. Check
-  `diff.tool`/`merge.tool` first so an unconfigured user gets a message, not a
-  torn-down screen.
+---
+If this file contradicts the code, **the code wins** — fix CLAUDE.md in the same
+session you notice.

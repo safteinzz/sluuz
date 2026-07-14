@@ -35,6 +35,18 @@ pub fn git_capture(repo: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Like `git_capture`, but returns stdout **untrimmed**. Use it whenever leading
+/// whitespace is data — notably `git status --porcelain`, where the first column
+/// is a space when a file has no staged change. Trimming would eat that space on
+/// the first record and shift the whole line ("Cargo.lock" → "argo.lock").
+pub fn git_capture_raw(repo: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Run `git -C <repo> <args>` and return (success, combined stdout+stderr).
 /// For commands like fetch/pull where progress goes to stderr and you want to
 /// report what happened regardless of exit status.

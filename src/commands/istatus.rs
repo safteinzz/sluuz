@@ -9,7 +9,7 @@
 //!
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
-use crate::git::{git_capture, git_run};
+use crate::git::{git_capture, git_capture_raw, git_run};
 use crate::tui::{
     clamp_scroll, diff_scrollbar, half_page, is_down, is_left, is_right, is_up, list_scrollbar,
     norm_esc, pane_block, pane_height, pane_width, pop_keyboard_enhancement, prepare_diff,
@@ -341,7 +341,10 @@ fn toggle_selected(root: &str, entries: &[Entry], visible: &[usize], sel: usize)
 /// (so paths with spaces/newlines are safe) and, for renames/copies, follows the
 /// record with an extra NUL-terminated original path, which we skip.
 fn load_status(root: &str) -> Vec<Entry> {
-    let raw = match git_capture(root, &["status", "--porcelain", "-z"]) {
+    // `git_capture_raw`, not `git_capture`: the porcelain's first column is a
+    // SPACE when a file has no staged change, and trimming would eat it on the
+    // first record — shifting the status codes and the path by one char.
+    let raw = match git_capture_raw(root, &["status", "--porcelain", "-z"]) {
         Some(r) => r,
         None => return Vec::new(),
     };
