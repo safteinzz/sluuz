@@ -60,6 +60,13 @@ pub fn run(args: Args) {
         return;
     }
 
+    // Anchor at the repo root: git reports file paths root-relative, so
+    // `git show -- <path>` (and the difftool) wouldn't resolve from a
+    // subdirectory — the diff pane would come up blank.
+    if let Some(root) = git_capture(".", &["rev-parse", "--show-toplevel"]) {
+        let _ = std::env::set_current_dir(&root);
+    }
+
     let branches = load_branches(args.all, args.remotes);
     if branches.is_empty() {
         eprintln!("no branches (or not a git repo)");

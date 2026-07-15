@@ -7,6 +7,7 @@
 //! diff. Scroll the diff with Ctrl-j/k, Ctrl-d/u (vim half-page) or PgDn/PgUp.
 //! q / Ctrl-C quit; Esc steps back. Arrow keys mirror j/k everywhere.
 
+use crate::git::git_capture;
 use crate::tui::{
     clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, difftool_commit, file_item,
     half_page, is_back, is_down, is_left, is_open, is_right, is_up, list_scrollbar, load_commits,
@@ -45,6 +46,13 @@ pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu ilog needs an interactive terminal — use `slu trace` for plain output");
         return;
+    }
+
+    // Anchor at the repo root: git reports file paths root-relative, so
+    // `git show -- <path>` (and the difftool) wouldn't resolve from a
+    // subdirectory — the diff pane would come up blank.
+    if let Some(root) = git_capture(".", &["rev-parse", "--show-toplevel"]) {
+        let _ = std::env::set_current_dir(&root);
     }
 
     let extra: &[&str] = if args.all { &["--all"] } else { &[] };

@@ -34,10 +34,12 @@
   use `git_capture_raw`, not `git_capture`: the latter `.trim()`s, which ate
   the leading space of the first record and shifted the whole line
   ("Cargo.lock" → "argo.lock").
-- **When running git against paths from `git status`, run it from the repo
-  root** (`git rev-parse --show-toplevel`): status reports root-relative
-  paths, so a diff/add issued from a subdirectory fails with "Could not
-  access '<path>'".
+- **When running git against paths it reported** (`git status --porcelain`,
+  `git show --name-status`), anchor at the repo root (`git rev-parse
+  --show-toplevel`): git reports paths root-relative, so `diff`/`add`/`show
+  -- <path>` from a subdirectory silently mis-resolves — istatus showed "Could
+  not access '<path>'", ilog/ibranch a blank diff pane. istatus uses `git -C
+  <root>`; ilog/ibranch `set_current_dir(root)` at startup. Bitten us twice.
 - **When a TUI shells out to an interactive program** (e.g. `git difftool`),
   you must suspend it: pop the kitty flags → `ratatui::restore()` → run →
   `ratatui::init()` → re-push. Check `diff.tool`/`merge.tool` *first*, so an
