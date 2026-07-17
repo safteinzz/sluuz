@@ -11,10 +11,10 @@
 
 use crate::git::{git_capture, git_capture_raw, git_run};
 use crate::tui::{
-    clamp_scroll, diff_scrollbar, half_page, is_down, is_left, is_right, is_up, list_scrollbar,
-    norm_esc, pane_block, pane_height, pane_width, pop_keyboard_enhancement, prepare_diff,
-    push_keyboard_enhancement, render_prepared, run_difftool, RenderedDiff, CTRL_Y_MOVE, X_MOVE,
-    Y_MOVE,
+    clamp_hscroll, clamp_scroll, diff_hscrollbar, diff_scrollbar, half_page, is_down, is_left,
+    is_right, is_up, list_scrollbar, norm_esc, pane_block, pane_height, pane_width, pop_keyboard_enhancement,
+    prepare_diff, push_keyboard_enhancement, render_prepared, run_difftool, RenderedDiff,
+    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -116,6 +116,7 @@ fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io:
     let mut prepared = RenderedDiff::default();
     let mut diff = Text::default();
     let mut diff_scroll = 0u16;
+    let mut diff_hscroll = 0u16;
     refresh_diff(root, &entries, &visible, sel, SCOPES[scope_idx], width, &mut prepared, &mut diff);
 
     let mut state = ListState::default();
@@ -133,6 +134,8 @@ fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io:
                     scope,
                     diff: &diff,
                     diff_scroll,
+                    prepared: &prepared,
+                    diff_hscroll,
                     msg: msg.as_deref(),
                 },
                 &mut state,
@@ -144,7 +147,7 @@ fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io:
                 let w = pane_width(terminal);
                 if w != width {
                     width = w;
-                    diff = render_prepared(&prepared, width, 0);
+                    diff = render_prepared(&prepared, width, diff_hscroll);
                 }
             }
             Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -170,6 +173,16 @@ fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io:
                     diff_scroll = diff_scroll.saturating_add(half);
                 } else if ctrl && code == KeyCode::Char('u') {
                     diff_scroll = diff_scroll.saturating_sub(half);
+                } else if ctrl && is_right(code) {
+                    diff_hscroll = clamp_hscroll(
+                        diff_hscroll.saturating_add(8),
+                        prepared.max_line(),
+                        prepared.cell_width(width),
+                    );
+                    diff = render_prepared(&prepared, width, diff_hscroll);
+                } else if ctrl && is_left(code) {
+                    diff_hscroll = diff_hscroll.saturating_sub(8);
+                    diff = render_prepared(&prepared, width, diff_hscroll);
                 } else if code == KeyCode::PageDown {
                     diff_scroll = diff_scroll.saturating_add(10);
                 } else if code == KeyCode::PageUp {
@@ -180,11 +193,11 @@ fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io:
                 } else if is_up(code) && sel > 0 {
                     sel -= 1;
                     dirty = true;
-                } else if is_left(code) && scope_idx > 0 {
+                } else if !ctrl && is_left(code) && scope_idx > 0 {
                     scope_idx -= 1;
                     sel = 0;
                     dirty = true;
-                } else if is_right(code) && scope_idx + 1 < SCOPES.len() {
+                } else if !ctrl && is_right(code) && scope_idx + 1 < SCOPES.len() {
                     scope_idx += 1;
                     sel = 0;
                     dirty = true;
@@ -234,6 +247,7 @@ fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io:
                     }
                     state.select((!visible.is_empty()).then_some(sel));
                     diff_scroll = 0;
+                    diff_hscroll = 0;
                     refresh_diff(
                         root,
                         &entries,
@@ -376,6 +390,8 @@ struct View<'a> {
     scope: Scope,
     diff: &'a Text<'static>,
     diff_scroll: u16,
+    prepared: &'a RenderedDiff,
+    diff_hscroll: u16,
     msg: Option<&'a str>,
 }
 
@@ -410,13 +426,15 @@ fn draw(frame: &mut ratatui::Frame, v: View, state: &mut ListState) {
     let title = match v.msg {
         Some(m) => format!(" {path}  ⚠ {m} "),
         None if path.is_empty() => " (nothing to show) ".to_string(),
-        None => format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll "),
+        None => format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan "),
     };
     let diff = Paragraph::new(v.diff.clone())
         .block(pane_block(title, true))
         .scroll((v.diff_scroll, 0));
     frame.render_widget(diff, areas[1]);
     diff_scrollbar(frame, areas[1], v.diff.lines.len(), v.diff_scroll);
+    let cell = v.prepared.cell_width(areas[1].width.saturating_sub(2));
+    diff_hscrollbar(frame, areas[1], v.prepared.max_line(), cell, v.diff_hscroll);
 }
 
 /// Which side of the diff the bottom pane is showing.

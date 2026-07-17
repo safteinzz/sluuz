@@ -9,8 +9,9 @@
 
 use crate::git::git_capture;
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, difftool_commit, file_item,
-    half_page, is_back, is_down, is_left, is_open, is_right, is_up, load_commits, load_diff_raw,
+    clamp_hscroll, clamp_scroll, commit_item, diff_hscrollbar, diff_scrollbar, difftool_commit,
+    file_item, half_page, is_back, is_down, is_left, is_open, is_right, is_up, load_commits,
+    load_diff_raw,
     load_files, norm_esc, pane_block, pane_height, pane_width, pop_keyboard_enhancement,
     prepare_diff, push_keyboard_enhancement, list_scrollbar, render_prepared, Commit, FileEntry,
     RenderedDiff, CTRL_X_MOVE, CTRL_Y_MOVE, Y_MOVE, SEP,
@@ -121,6 +122,8 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch], enhanced: boo
                     file_sel,
                     diff: &diff,
                     diff_scroll,
+                    prepared: &prepared,
+                    diff_hscroll,
                     view: &view,
                     msg: msg.as_deref(),
                 },
@@ -227,7 +230,7 @@ fn event_loop(terminal: &mut DefaultTerminal, branches: &[Branch], enhanced: boo
                             diff_hscroll = clamp_hscroll(
                                 diff_hscroll.saturating_add(8),
                                 prepared.max_line(),
-                                pane_width(terminal) / 2,
+                                prepared.cell_width(width),
                             );
                             diff = render_prepared(&prepared, width, diff_hscroll);
                         } else if ctrl && is_left(code) {
@@ -278,6 +281,8 @@ struct Panes<'a> {
     file_sel: usize,
     diff: &'a Text<'static>,
     diff_scroll: u16,
+    prepared: &'a RenderedDiff,
+    diff_hscroll: u16,
     view: &'a View,
     msg: Option<&'a str>,
 }
@@ -364,6 +369,8 @@ fn draw(
                 .scroll((p.diff_scroll, 0));
             frame.render_widget(view, areas[1]);
             diff_scrollbar(frame, areas[1], p.diff.lines.len(), p.diff_scroll);
+            let cell = p.prepared.cell_width(areas[1].width.saturating_sub(2));
+            diff_hscrollbar(frame, areas[1], p.prepared.max_line(), cell, p.diff_hscroll);
         }
     }
 }

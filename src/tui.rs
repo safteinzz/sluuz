@@ -349,6 +349,25 @@ pub fn list_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize
     render_vscrollbar(frame, area, total, offset);
 }
 
+/// Horizontal scrollbar along a diff pane's bottom border. `max_line` is the
+/// widest content line, `cell_w` the visible columns per side, `hscroll` the pan
+/// offset. Drawn only when the content is wider than one cell (else there's
+/// nothing to pan). Kept off the corners with a 1-col horizontal inset.
+pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u16, hscroll: u16) {
+    let cell = cell_w as usize;
+    if max_line <= cell {
+        return;
+    }
+    let mut state = ScrollbarState::new(max_line - cell).position(hscroll as usize);
+    // `■` renders vertically centered and medium-weight — between the too-thin,
+    // low-sitting `▬` and the full-cell block `█`.
+    let bar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .thumb_symbol("■");
+    frame.render_stateful_widget(bar, area.inner(Margin::new(1, 0)), &mut state);
+}
+
 // ── side-by-side diff rendering ─────────────────────────────────────────────
 
 /// Two highlighters per file — one for the old side, one for the new — so a
@@ -388,6 +407,15 @@ impl RenderedDiff {
     /// Longest content line, for clamping horizontal scroll.
     pub fn max_line(&self) -> usize {
         self.max_line
+    }
+
+    /// Visible content columns per side at total pane `width`. Mirrors the layout
+    /// math in `render_prepared` (gutters + " │ " separator eat into each side),
+    /// so horizontal-scroll clamping matches what's actually drawn — otherwise the
+    /// tail of a medium-length line stays hidden because panning stops short.
+    pub fn cell_width(&self, width: u16) -> u16 {
+        let avail = (width as usize).saturating_sub(2 * self.gutter_w + 5);
+        (avail / 2).max(1) as u16
     }
 }
 

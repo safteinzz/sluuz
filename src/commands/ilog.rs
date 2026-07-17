@@ -9,8 +9,9 @@
 
 use crate::git::git_capture;
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, commit_item, diff_scrollbar, difftool_commit, file_item,
-    half_page, is_back, is_down, is_left, is_open, is_right, is_up, list_scrollbar, load_commits,
+    clamp_hscroll, clamp_scroll, commit_item, diff_hscrollbar, diff_scrollbar, difftool_commit,
+    file_item, half_page, is_back, is_down, is_left, is_open, is_right, is_up, list_scrollbar,
+    load_commits,
     load_diff_raw, load_files, norm_esc, pane_block, pane_height, pane_width,
     pop_keyboard_enhancement, prepare_diff, push_keyboard_enhancement, render_prepared, Commit,
     FileEntry, RenderedDiff, CTRL_X_MOVE, CTRL_Y_MOVE, Y_MOVE,
@@ -104,6 +105,8 @@ fn event_loop(terminal: &mut DefaultTerminal, commits: &[Commit], enhanced: bool
                 &view,
                 &diff,
                 diff_scroll,
+                &prepared,
+                diff_hscroll,
                 file_sel,
                 msg.as_deref(),
             )
@@ -185,7 +188,7 @@ fn event_loop(terminal: &mut DefaultTerminal, commits: &[Commit], enhanced: bool
                             diff_hscroll = clamp_hscroll(
                                 diff_hscroll.saturating_add(8),
                                 prepared.max_line(),
-                                pane_width(terminal) / 2,
+                                prepared.cell_width(width),
                             );
                             diff = render_prepared(&prepared, width, diff_hscroll);
                         } else if ctrl && is_left(code) {
@@ -228,6 +231,8 @@ fn draw(
     view: &View,
     diff: &Text<'static>,
     diff_scroll: u16,
+    prepared: &RenderedDiff,
+    diff_hscroll: u16,
     file_sel: usize,
     status: Option<&str>,
 ) {
@@ -260,6 +265,8 @@ fn draw(
                 .scroll((diff_scroll, 0));
             frame.render_widget(view, areas[1]);
             diff_scrollbar(frame, areas[1], diff.lines.len(), diff_scroll);
+            let cell = prepared.cell_width(areas[1].width.saturating_sub(2));
+            diff_hscrollbar(frame, areas[1], prepared.max_line(), cell, diff_hscroll);
         }
         _ => {
             let title = if files.is_empty() {
