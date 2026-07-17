@@ -1,2 +1,7 @@
 /target
 /test-playground
+CLAUDE.md
+GEMINI.md
+.cursor/
+.aider*
+.windsurfrules

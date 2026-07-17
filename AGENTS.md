@@ -1,8 +1,8 @@
-# CLAUDE.md
+# AGENTS.md
 
 ## Hard rules
 - **Commit, push, and publish only when the user says to ship.** They test
-  interactively first and have rejected premature commits.
+  interactively first; a mid-work commit is never the deliverable.
 - Release flow, in this exact order: `cargo clippy` warning-clean (+ `cargo
   test` if a suite exists) → bump `version` in `Cargo.toml` → one commit
   (short conventional message, never co-authored) → `git push origin main` →
@@ -10,14 +10,14 @@
   after publish succeeds**: `git tag vX.Y.Z && git push origin --tags`. A tag
   must never point at a version that failed to publish.
 - Commit messages: short conventional tags (`feat:`, `fix:`, ...). **Never**
-  add a `Co-Authored-By` trailer - the user has asked for this repeatedly.
+  add a `Co-Authored-By` trailer.
 - **No em-dashes** anywhere user-facing (README, --help, crate description,
-  commit messages, prose) - the user reads them as AI-generated text.
+  commit messages, prose) - they read as AI-generated text.
 - **Never shadow a real git command** - passthrough is the whole premise, so an
   enhanced view always gets a distinct verb (`trace`, not `log`; the `i` prefix
   for interactive: `ilog`/`ibranch`/`istatus`/`itidy`).
 - Fix the root cause. If a workaround must ship, say the word "workaround" out
-  loud - silently papering over a bug has been called out before. Same for
+  loud, so a silent patch never passes as a real fix. Same for
   lints: never `#[allow]` a warning away; delete or fix the code it points at.
 - Scratch/test git repos go in `test-playground/` (gitignored). Build them
   there and **leave them** - the user opens them to test the TUIs by hand.
@@ -37,9 +37,9 @@
 - **When running git against paths it reported** (`git status --porcelain`,
   `git show --name-status`), anchor at the repo root (`git rev-parse
   --show-toplevel`): git reports paths root-relative, so `diff`/`add`/`show
-  -- <path>` from a subdirectory silently mis-resolves — istatus showed "Could
+  -- <path>` from a subdirectory silently mis-resolves - istatus showed "Could
   not access '<path>'", ilog/ibranch a blank diff pane. istatus uses `git -C
-  <root>`; ilog/ibranch `set_current_dir(root)` at startup. Bitten us twice.
+  <root>`; ilog/ibranch `set_current_dir(root)` at startup.
 - **When a TUI shells out to an interactive program** (e.g. `git difftool`),
   you must suspend it: pop the kitty flags → `ratatui::restore()` → run →
   `ratatui::init()` → re-push. Check `diff.tool`/`merge.tool` *first*, so an
@@ -60,8 +60,7 @@
   and strip `refs/heads/`. `%(refname:short)` returns `heads/v1.2.3` when a
   tag shares the name, which `git branch -d` then rejects.
 - **When behavior doesn't match the code you just wrote:** the debug binary is
-  stale. `cargo clean -p sluuz`, then rebuild. This has bitten us more than
-  once.
+  stale. `cargo clean -p sluuz`, then rebuild.
 - `syntect` is pinned to `default-features=false` + `default-fancy` - the
   pure-Rust regex backend, so there's no C/oniguruma and it builds on Windows.
   Don't "fix" the feature flags.
@@ -81,7 +80,7 @@
 - **Known gap: no automated tests yet.** TUIs are verified by hand in
   `test-playground/`, but new *pure logic* (parsing, branch classification)
   should get unit tests in a `#[cfg(test)] mod tests` - throwaway manual
-  checks let regressions through (learned in stowe; see stowe's `tests/cli.rs`
+  checks let regressions through (see stowe's `tests/cli.rs`
   for the pattern).
 
 ## Overview
@@ -93,5 +92,5 @@ binary `slu`, AGPL-3.0-only. `src/main.rs` holds the clap `Cmd` enum +
 `passthrough()`; `src/tui.rs` holds everything shared by the interactive views.
 
 ## Self-repair
-If this file contradicts the code, **the code wins** - fix CLAUDE.md in the
+If this file contradicts the code, **the code wins** - fix AGENTS.md in the
 same session you notice.
