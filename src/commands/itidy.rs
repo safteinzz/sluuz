@@ -170,10 +170,10 @@ fn draw(
 
     frame.render_widget(footer(msg), areas[1]);
 
-    if let Some(yes) = confirm {
-        if let Some(b) = branches.get(sel) {
-            confirm_popup(frame, &b.name, yes);
-        }
+    if let Some(yes) = confirm
+        && let Some(b) = branches.get(sel)
+    {
+        confirm_popup(frame, &b.name, yes);
     }
 }
 

@@ -14,6 +14,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::{DefaultTerminal, Frame};
+use std::collections::HashSet;
 use std::io::stdout;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -155,6 +156,15 @@ pub struct FileEntry {
 
 // ── loaders ─────────────────────────────────────────────────────────────────
 
+/// Hashes reachable from local branches but on **no** remote — i.e. commits you
+/// haven't pushed anywhere. A commit not in this set is on some remote (pushed).
+/// Empty when the repo has no remotes (nothing is "pushed").
+pub fn load_unpushed() -> HashSet<String> {
+    git_capture(".", &["rev-list", "--branches", "--not", "--remotes"])
+        .map(|out| out.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// Load commits as `git log -n <limit> [extra…]`. `extra` is e.g. `["--all"]`
 /// or a branch name, appended after the format args.
 pub fn load_commits(extra: &[&str], limit: usize) -> Vec<Commit> {
@@ -215,8 +225,19 @@ pub fn max_line_width(raw: &str) -> usize {
 
 // ── widget helpers ──────────────────────────────────────────────────────────
 
-pub fn commit_item(c: &Commit) -> ListItem<'static> {
+/// Render a commit row. `unpushed` prepends a yellow `↑` marker (this commit is
+/// on no remote yet); pushed commits get an aligning blank so columns line up.
+pub fn commit_item(c: &Commit, unpushed: bool) -> ListItem<'static> {
+    let mark = if unpushed {
+        Span::styled(
+            "↑ ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw("  ")
+    };
     ListItem::new(Line::from(vec![
+        mark,
         Span::styled(format!("{:<8}", c.short), Style::default().fg(Color::Yellow)),
         Span::styled(format!("{}  ", c.date), Style::default().fg(Color::Green)),
         Span::styled(format!("<{}> ", c.committer), Style::default().fg(Color::Blue)),
@@ -586,10 +607,10 @@ fn gutter(num: Option<usize>, g: usize, bg: Option<Color>) -> Vec<Span<'static>>
 fn gutter_width(raw: &str) -> usize {
     let mut max = 1usize;
     for line in raw.lines() {
-        if line.starts_with("@@") {
-            if let Some((a, b, c, d)) = parse_hunk(line) {
-                max = max.max(a + b).max(c + d);
-            }
+        if line.starts_with("@@")
+            && let Some((a, b, c, d)) = parse_hunk(line)
+        {
+            max = max.max(a + b).max(c + d);
         }
     }
     digits(max).max(3)

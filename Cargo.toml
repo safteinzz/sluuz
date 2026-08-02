@@ -1,8 +1,8 @@
 [package]
 name = "sluuz"
-version = "0.4.11"
-edition = "2021"
-description = "git, but it sleuths — a git superset with cross-repo search, secret scanning, and multi-repo management"
+version = "0.4.12"
+edition = "2024"
+description = "git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management"
 license = "AGPL-3.0-only"
 repository = "https://gitlab.com/safteinzz/sluuz"
 

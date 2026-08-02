@@ -134,6 +134,11 @@ one rule, so the keys never surprise you:
   until you close it. If you have no `diff.tool` set, it says so instead.
 - **`Esc`** (or `Ctrl-[`) steps back · **`q`** / `Ctrl-C` quit.
 
+In `ilog` and `ibranch`, a yellow `↑` marks what isn't pushed to any remote (a
+commit that exists nowhere remote, or a branch with no upstream / ahead / gone),
+and `h`/`l` slides the scope: `ilog` between **local (unpushed) / all / pushed**,
+`ibranch` between **local / all / remote**.
+
 ### `slu ilog` — interactive log explorer (TUI)
 
 Opens a full-screen browser: scroll the commit list up top, see the selected
@@ -158,9 +163,9 @@ marked), then drill into its commits → a commit's files → a file's side-by-s
 diff, exactly like `ilog`.
 
 ```bash
-slu ibranch              # local branches
-slu ibranch -r           # remote-tracking branches only (like git branch -r)
-slu ibranch -a           # local and remote
+slu ibranch              # start in the local scope
+slu ibranch -r           # start in the remote scope
+slu ibranch -a           # start in the all scope
 ```
 
 Keys: `j`/`k` move the top pane, `Ctrl-↑`/`Ctrl-↓` the bottom one; `Enter` drills

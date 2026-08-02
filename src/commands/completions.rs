@@ -100,23 +100,23 @@ fn install(shell: Shell) {
     let line = shell.rc_line();
 
     // Already there? Don't add it twice.
-    if let Ok(existing) = std::fs::read_to_string(&rc) {
-        if existing.lines().any(|l| l.trim() == line) {
-            println!(
-                "{} {}",
-                "✓ already set up in".dimmed(),
-                rc.display().to_string().bold()
-            );
-            return;
-        }
+    if let Ok(existing) = std::fs::read_to_string(&rc)
+        && existing.lines().any(|l| l.trim() == line)
+    {
+        println!(
+            "{} {}",
+            "✓ already set up in".dimmed(),
+            rc.display().to_string().bold()
+        );
+        return;
     }
 
     // fish's config lives under ~/.config/fish — make sure the dir exists.
-    if let Some(parent) = rc.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("{} {e}", "slu: could not create".red());
-            std::process::exit(1);
-        }
+    if let Some(parent) = rc.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("{} {e}", "slu: could not create".red());
+        std::process::exit(1);
     }
 
     let block = format!("\n# sluuz shell completion\n{line}\n");
