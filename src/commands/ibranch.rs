@@ -243,7 +243,7 @@ fn event_loop(
                             commit_sel = 0;
                             commit_state.select(Some(0));
                         } else if is_open(code) && !commits.is_empty() {
-                            files = load_files(&commits[commit_sel].hash);
+                            files = load_files(&commits[commit_sel].hash, &[]);
                             file_sel = 0;
                             file_state.select(Some(0));
                             view = View::Commit;
@@ -261,13 +261,13 @@ fn event_loop(
                         } else if is_down(code) && commit_sel + 1 < commits.len() {
                             commit_sel += 1;
                             commit_state.select(Some(commit_sel));
-                            files = load_files(&commits[commit_sel].hash);
+                            files = load_files(&commits[commit_sel].hash, &[]);
                             file_sel = 0;
                             file_state.select(Some(0));
                         } else if is_up(code) && commit_sel > 0 {
                             commit_sel -= 1;
                             commit_state.select(Some(commit_sel));
-                            files = load_files(&commits[commit_sel].hash);
+                            files = load_files(&commits[commit_sel].hash, &[]);
                             file_sel = 0;
                             file_state.select(Some(0));
                         } else if is_open(code) && !files.is_empty() {

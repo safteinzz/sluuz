@@ -151,7 +151,11 @@ required.
 ```bash
 slu ilog                 # explore the current branch
 slu ilog --all -n 500    # all branches, more history
+slu ilog src/main.rs     # only commits touching that file
 ```
+
+Give it a path (a file or a directory) and the log narrows to commits that
+touched it, with each commit's file list narrowed to the same path.
 
 Keys: `j`/`k` move commits · `Ctrl-↑`/`Ctrl-↓` select a file · `Enter` opens its
 diff (and `Enter` again opens it in your difftool).

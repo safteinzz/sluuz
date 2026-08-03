@@ -34,6 +34,11 @@ pub struct Args {
     /// Maximum number of commits to load
     #[arg(short = 'n', long, default_value_t = 200)]
     pub number: usize,
+
+    /// Only commits that touch these paths (file or directory); diffs show just
+    /// that file's change
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
 }
 
 /// Which level the user is currently navigating.
@@ -80,17 +85,28 @@ pub fn run(args: Args) {
         let _ = std::env::set_current_dir(&root);
     }
 
-    let extra: &[&str] = if args.all { &["--all"] } else { &[] };
-    let commits = load_commits(extra, args.number);
+    // Build the `git log` args: [--all] then `-- <paths>` to filter to a file.
+    let mut extra: Vec<String> = Vec::new();
+    if args.all {
+        extra.push("--all".to_string());
+    }
+    if !args.paths.is_empty() {
+        extra.push("--".to_string());
+        extra.extend(args.paths.iter().cloned());
+    }
+    let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+    let commits = load_commits(&extra_refs, args.number);
     if commits.is_empty() {
         eprintln!("no commits (or not a git repo)");
         return;
     }
     let unpushed = load_unpushed();
+    // The same pathspec filters each commit's file list to just the target.
+    let path_refs: Vec<&str> = args.paths.iter().map(String::as_str).collect();
 
     let mut terminal = ratatui::init();
     let enhanced = push_keyboard_enhancement();
-    let result = event_loop(&mut terminal, &commits, &unpushed, enhanced);
+    let result = event_loop(&mut terminal, &commits, &unpushed, &path_refs, enhanced);
     if enhanced {
         pop_keyboard_enhancement();
     }
@@ -105,13 +121,15 @@ fn event_loop(
     terminal: &mut DefaultTerminal,
     commits: &[Commit],
     unpushed: &HashSet<String>,
+    paths: &[&str],
     enhanced: bool,
 ) -> io::Result<()> {
     let mut width = pane_width(terminal);
+    let path_label = (!paths.is_empty()).then(|| paths.join(" "));
     let mut scope_idx = 1usize; // default: All
     let mut visible = visible_commits(commits, unpushed, SCOPES[scope_idx]);
     let mut commit_sel = 0usize; // index into `visible`
-    let mut files = files_for(commits, &visible, commit_sel);
+    let mut files = files_for(commits, &visible, commit_sel, paths);
     let mut file_sel = 0usize;
     let mut view = View::Browse;
     let mut diff = Text::default();
@@ -143,6 +161,7 @@ fn event_loop(
                     prepared: &prepared,
                     diff_hscroll,
                     status: msg.as_deref(),
+                    path_label: path_label.as_deref(),
                 },
                 &mut commit_state,
                 &mut file_state,
@@ -184,7 +203,7 @@ fn event_loop(
                             if commit_sel + 1 < visible.len() {
                                 commit_sel += 1;
                                 commit_state.select(Some(commit_sel));
-                                files = files_for(commits, &visible, commit_sel);
+                                files = files_for(commits, &visible, commit_sel, paths);
                                 file_sel = 0;
                                 file_state.select(Some(0));
                             }
@@ -192,20 +211,20 @@ fn event_loop(
                             if commit_sel > 0 {
                                 commit_sel -= 1;
                                 commit_state.select(Some(commit_sel));
-                                files = files_for(commits, &visible, commit_sel);
+                                files = files_for(commits, &visible, commit_sel, paths);
                                 file_sel = 0;
                                 file_state.select(Some(0));
                             }
                         } else if !ctrl && is_left(code) && scope_idx > 0 {
                             scope_idx -= 1;
                             (visible, commit_sel, files) =
-                                rescope(commits, unpushed, SCOPES[scope_idx], &mut commit_state);
+                                rescope(commits, unpushed, SCOPES[scope_idx], paths, &mut commit_state);
                             file_sel = 0;
                             file_state.select(Some(0));
                         } else if !ctrl && is_right(code) && scope_idx + 1 < SCOPES.len() {
                             scope_idx += 1;
                             (visible, commit_sel, files) =
-                                rescope(commits, unpushed, SCOPES[scope_idx], &mut commit_state);
+                                rescope(commits, unpushed, SCOPES[scope_idx], paths, &mut commit_state);
                             file_sel = 0;
                             file_state.select(Some(0));
                         } else if is_open(code) && !files.is_empty() {
@@ -287,10 +306,11 @@ fn visible_commits(commits: &[Commit], unpushed: &HashSet<String>, scope: Scope)
         .collect()
 }
 
-/// The files of the commit currently selected in `visible`, or empty.
-fn files_for(commits: &[Commit], visible: &[usize], commit_sel: usize) -> Vec<FileEntry> {
+/// The files of the commit currently selected in `visible`, or empty. `paths`
+/// (if any) filters the file list to the target of a path-scoped `ilog`.
+fn files_for(commits: &[Commit], visible: &[usize], commit_sel: usize, paths: &[&str]) -> Vec<FileEntry> {
     match visible.get(commit_sel) {
-        Some(&i) => load_files(&commits[i].hash),
+        Some(&i) => load_files(&commits[i].hash, paths),
         None => Vec::new(),
     }
 }
@@ -300,11 +320,12 @@ fn rescope(
     commits: &[Commit],
     unpushed: &HashSet<String>,
     scope: Scope,
+    paths: &[&str],
     commit_state: &mut ListState,
 ) -> (Vec<usize>, usize, Vec<FileEntry>) {
     let visible = visible_commits(commits, unpushed, scope);
     commit_state.select((!visible.is_empty()).then_some(0));
-    let files = files_for(commits, &visible, 0);
+    let files = files_for(commits, &visible, 0, paths);
     (visible, 0, files)
 }
 
@@ -322,6 +343,7 @@ struct Panes<'a> {
     prepared: &'a RenderedDiff,
     diff_hscroll: u16,
     status: Option<&'a str>,
+    path_label: Option<&'a str>,
 }
 
 fn draw(
@@ -340,11 +362,12 @@ fn draw(
         .iter()
         .map(|&i| commit_item(&p.commits[i], p.unpushed.contains(&p.commits[i].hash)))
         .collect();
+    let filter = p.path_label.map(|s| format!(" {s} ")).unwrap_or_default();
     let commits_title = if p.visible.is_empty() {
-        format!(" commits · {}  (none)   {X_MOVE} scope ", p.scope.label())
+        format!(" commits ·{filter}{}  (none)   {X_MOVE} scope ", p.scope.label())
     } else {
         format!(
-            " commits · {}  {}/{}   {Y_MOVE} · {X_MOVE} scope · ↑=unpushed ",
+            " commits ·{filter}{}  {}/{}   {Y_MOVE} · {X_MOVE} scope · ↑=unpushed ",
             p.scope.label(),
             p.commit_sel + 1,
             p.visible.len()

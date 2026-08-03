@@ -87,9 +87,10 @@ enum Cmd {
     ///   -n N      max commits (30)
     #[command(verbatim_doc_comment)]
     Trace(commands::trace::Args),
-    /// Interactive log explorer (TUI)
+    /// Interactive log explorer (TUI) [path…]
     ///   -a        include all branches
     ///   -n N      commits to load (200)
+    ///   [path…]   only commits touching these paths
     #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
     /// Interactive branch explorer (TUI)

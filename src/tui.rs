@@ -191,8 +191,15 @@ pub fn load_commits(extra: &[&str], limit: usize) -> Vec<Commit> {
 }
 
 /// The files a commit touched, with their status (cheap — no diff content).
-pub fn load_files(hash: &str) -> Vec<FileEntry> {
-    git_capture(".", &["show", "--name-status", "--format=", hash])
+/// When `pathspec` is non-empty, only files matching it are returned (so a
+/// path-filtered `ilog` shows just that file's change in each commit).
+pub fn load_files(hash: &str, pathspec: &[&str]) -> Vec<FileEntry> {
+    let mut args = vec!["show", "--name-status", "--format=", hash];
+    if !pathspec.is_empty() {
+        args.push("--");
+        args.extend_from_slice(pathspec);
+    }
+    git_capture(".", &args)
         .map(|out| {
             out.lines()
                 .filter(|l| !l.is_empty())
