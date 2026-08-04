@@ -78,6 +78,12 @@ pub fn run(args: Args) {
         return;
     }
 
+    // The user typed their paths relative to the cwd, but we run git from the
+    // repo root — so rewrite them to root-relative BEFORE the chdir, or
+    // `slu ilog .env` from a subdirectory would look for `<root>/.env`.
+    let prefix = git_capture(".", &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    let paths: Vec<String> = args.paths.iter().map(|p| rebase_path(p, &prefix)).collect();
+
     // Anchor at the repo root: git reports file paths root-relative, so
     // `git show -- <path>` (and the difftool) wouldn't resolve from a
     // subdirectory — the diff pane would come up blank.
@@ -90,9 +96,9 @@ pub fn run(args: Args) {
     if args.all {
         extra.push("--all".to_string());
     }
-    if !args.paths.is_empty() {
+    if !paths.is_empty() {
         extra.push("--".to_string());
-        extra.extend(args.paths.iter().cloned());
+        extra.extend(paths.iter().cloned());
     }
     let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
     let commits = load_commits(&extra_refs, args.number);
@@ -102,7 +108,7 @@ pub fn run(args: Args) {
     }
     let unpushed = load_unpushed();
     // The same pathspec filters each commit's file list to just the target.
-    let path_refs: Vec<&str> = args.paths.iter().map(String::as_str).collect();
+    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
 
     let mut terminal = ratatui::init();
     let enhanced = push_keyboard_enhancement();
@@ -292,6 +298,29 @@ fn event_loop(
     Ok(())
 }
 
+/// Rewrite a user-typed path so it is relative to the repo root. `prefix` is
+/// `git rev-parse --show-prefix` (the cwd's path below the root, e.g. `PROD/`,
+/// empty at the root). Absolute paths are left alone — git resolves those
+/// itself. `.` and `..` segments are folded lexically so `../x` from `PROD/`
+/// becomes `x`, not `PROD/../x`.
+fn rebase_path(path: &str, prefix: &str) -> String {
+    if prefix.is_empty() || std::path::Path::new(path).is_absolute() {
+        return path.to_string();
+    }
+    let joined = format!("{prefix}{path}");
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in joined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    parts.join("/")
+}
+
 /// Indices of `commits` that belong in `scope`.
 fn visible_commits(commits: &[Commit], unpushed: &HashSet<String>, scope: Scope) -> Vec<usize> {
     commits
@@ -414,5 +443,35 @@ fn draw(
             frame.render_stateful_widget(list, areas[1], file_state);
             list_scrollbar(frame, areas[1], p.files.len(), file_state.offset());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rebase_path;
+
+    #[test]
+    fn at_repo_root_paths_pass_through() {
+        assert_eq!(rebase_path(".env", ""), ".env");
+        assert_eq!(rebase_path("src/main.rs", ""), "src/main.rs");
+    }
+
+    #[test]
+    fn subdir_paths_become_root_relative() {
+        // `slu ilog .env` from PROD/ must look for PROD/.env, not <root>/.env.
+        assert_eq!(rebase_path(".env", "PROD/"), "PROD/.env");
+        assert_eq!(rebase_path("src/a.rs", "a/b/"), "a/b/src/a.rs");
+    }
+
+    #[test]
+    fn dot_and_dotdot_segments_fold() {
+        assert_eq!(rebase_path("./.env", "PROD/"), "PROD/.env");
+        assert_eq!(rebase_path("../.env", "PROD/"), ".env");
+        assert_eq!(rebase_path("../other/x", "a/b/"), "a/other/x");
+    }
+
+    #[test]
+    fn absolute_paths_are_left_to_git() {
+        assert_eq!(rebase_path("/tmp/x", "PROD/"), "/tmp/x");
     }
 }
