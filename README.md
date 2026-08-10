@@ -1,4 +1,4 @@
-# sluuz
+# sluuz (`slu`)
 
 > **Canonical:** [gitlab.com/safteinzz/sluuz](https://gitlab.com/safteinzz/sluuz) · **Mirror:** [github.com/safteinzz/sluuz](https://github.com/safteinzz/sluuz)
 
