@@ -1,10 +1,13 @@
 [package]
 name = "sluuz"
-version = "0.4.14"
+version = "0.5.0"
 edition = "2024"
 description = "git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management"
 license = "AGPL-3.0-only"
 repository = "https://gitlab.com/safteinzz/sluuz"
+# README images are fetched over the network by crates.io, never read out of the
+# package, so shipping them would only bloat every download.
+exclude = ["readme-assets/"]
 
 # The crate is `sluuz`, but the command you type is the shorter `slu`.
 [[bin]]

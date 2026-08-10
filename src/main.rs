@@ -98,6 +98,11 @@ enum Cmd {
     ///   -a        local + remote
     #[command(verbatim_doc_comment)]
     Ibranch(commands::ibranch::Args),
+    /// Interactive history search across repos (TUI) [path]
+    ///   type terms in the bar, enter runs the search
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
+    Iscan(commands::iscan::Args),
     /// Interactive git status — stage/unstage + diffs (TUI)
     ///   this repo · ←→/hl scope · s/u/space stage
     #[command(verbatim_doc_comment)]
@@ -130,6 +135,7 @@ fn main() {
         Cmd::Trace(args) => commands::trace::run(args),
         Cmd::Ilog(args) => commands::ilog::run(args),
         Cmd::Ibranch(args) => commands::ibranch::run(args),
+        Cmd::Iscan(args) => commands::iscan::run(args),
         Cmd::Istatus(args) => commands::istatus::run(args),
         Cmd::Update(args) => commands::update::run(args),
         Cmd::Completions(args) => commands::completions::run(args),

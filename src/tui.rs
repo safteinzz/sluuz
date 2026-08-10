@@ -218,7 +218,12 @@ pub fn load_files(hash: &str, pathspec: &[&str]) -> Vec<FileEntry> {
 /// One file's raw `git show` diff text (fetched once, then re-rendered locally
 /// for scrolling without re-shelling out to git).
 pub fn load_diff_raw(hash: &str, path: &str) -> String {
-    git_capture(".", &["show", "--format=", hash, "--", path]).unwrap_or_default()
+    load_diff_raw_in(".", hash, path)
+}
+
+/// `load_diff_raw` against a specific repo, for the multi-repo views.
+pub fn load_diff_raw_in(repo: &str, hash: &str, path: &str) -> String {
+    git_capture(repo, &["show", "--format=", hash, "--", path]).unwrap_or_default()
 }
 
 /// Longest content line in a raw diff (minus its +/-/space prefix), for
