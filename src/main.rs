@@ -36,7 +36,7 @@ Run `slu <command> --help` for the full detail of any command.";
     name = "sluuz",
     bin_name = "slu",
     version,
-    about = "git, but it sleuths — a git superset with cross-repo & history superpowers",
+    about,
     after_help = PASSTHROUGH,
     arg_required_else_help = true
 )]

@@ -2,13 +2,9 @@
 
 > **Canonical:** [gitlab.com/safteinzz/sluuz](https://gitlab.com/safteinzz/sluuz) · **Mirror:** [github.com/safteinzz/sluuz](https://github.com/safteinzz/sluuz)
 
-**git, but it sleuths.** 🕵️
-
-`sluuz` is a drop-in **git superset**. You type `slu` instead of `git` and
-everything works exactly as before, because anything git understands is passed
-straight through. On top of that it adds what git makes hard: searching history
-across every repo you own, auditing for leaked secrets, and interactive views of
-your log, branches, and working tree.
+<!-- desc:start -->
+git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management
+<!-- desc:end -->
 
 ## Install
 
