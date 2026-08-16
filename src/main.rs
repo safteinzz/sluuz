@@ -25,8 +25,27 @@ use std::process::Command;
 
 /// Shown at the bottom of `slu --help`: the one thing the command list can't
 /// convey — that everything else is just git.
-const PASSTHROUGH: &str = "Anything else is real git, passed straight through: slu commit -m \"fix\", slu push, slu rebase …
-Run `slu <command> --help` for the full detail of any command.";
+const PASSTHROUGH: &str = concat!(
+    "Anything else is real git, passed straight through: slu commit -m \"fix\", slu push, slu rebase …
+Run `slu <command> --help` for the full detail of any command.",
+    "\n\nby ",
+    env!("CARGO_PKG_AUTHORS"),
+    "  ",
+    env!("CARGO_PKG_REPOSITORY"),
+);
+
+/// `-V` stays a bare version string for scripts; `--version` spells out who
+/// wrote it, under what license, and where it lives. Every field comes from
+/// Cargo.toml, so none of it can drift from the manifest.
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\n",
+    env!("CARGO_PKG_AUTHORS"),
+    "\n",
+    env!("CARGO_PKG_LICENSE"),
+    "  ",
+    env!("CARGO_PKG_REPOSITORY"),
+);
 
 // `derive` lets clap generate all the argument parsing boilerplate from annotations.
 #[derive(Parser)]
@@ -36,6 +55,7 @@ Run `slu <command> --help` for the full detail of any command.";
     name = "sluuz",
     bin_name = "slu",
     version,
+    long_version = LONG_VERSION,
     about,
     after_help = PASSTHROUGH,
     arg_required_else_help = true

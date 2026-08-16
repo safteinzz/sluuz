@@ -3,6 +3,7 @@ name = "sluuz"
 version = "0.5.0"
 edition = "2024"
 description = "git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management"
+authors = ["Pablo Antonio Hernández Hernández (safteinzz)"]
 license = "AGPL-3.0-only"
 repository = "https://gitlab.com/safteinzz/sluuz"
 # README images are fetched over the network by crates.io, never read out of the
