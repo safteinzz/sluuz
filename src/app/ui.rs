@@ -18,6 +18,9 @@ use ratatui::Frame;
 /// which grows to fit the paths actually on screen.
 const NAME_W: usize = 28;
 const REPO_NAME_MAX: usize = 40;
+/// Cap on the origin column, which is the first thing to give when the terminal
+/// is narrow: it identifies a repo, it is not what you came to read.
+const ORIGIN_MAX: usize = 38;
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let areas = Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
@@ -157,15 +160,74 @@ fn repo_items(app: &App) -> Vec<ListItem<'static>> {
         .max()
         .unwrap_or(0)
         .min(24);
+    // Pad the state column so the origins line up in one readable column.
+    let state_w = app
+        .rsel
+        .visible
+        .iter()
+        .map(|&i| state_width(&app.repos[i]))
+        .max()
+        .unwrap_or(0);
     app.rsel
         .visible
         .iter()
-        .map(|&i| repo_item(&app.repos[i], name_w, branch_w))
+        .map(|&i| repo_item(&app.repos[i], name_w, branch_w, state_w))
         .collect()
 }
 
-/// Name, current branch, then the same state flags `slu repos` prints.
-fn repo_item(r: &RepoStatus, name_w: usize, branch_w: usize) -> ListItem<'static> {
+/// Printed width of a repo's state flags, for padding the column.
+fn state_width(r: &RepoStatus) -> usize {
+    state_spans(r)
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum()
+}
+
+/// `✚2 ↑1 ↓3` when there is something to report, else the clean marker.
+fn state_spans(r: &RepoStatus) -> Vec<Span<'static>> {
+    if !r.needs_attention() {
+        return if r.has_upstream {
+            vec![Span::styled("✓ clean", Style::default().fg(Color::Green))]
+        } else {
+            vec![Span::styled(
+                "✓ clean (no upstream)",
+                Style::default().add_modifier(Modifier::DIM),
+            )]
+        };
+    }
+    let mut spans = Vec::new();
+    if r.dirty > 0 {
+        spans.push(Span::styled(
+            format!("✚{}", r.dirty),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    if r.ahead > 0 {
+        spans.push(Span::styled(
+            format!("↑{}", r.ahead),
+            Style::default().fg(Color::Green),
+        ));
+    }
+    if r.behind > 0 {
+        spans.push(Span::styled(
+            format!("↓{}", r.behind),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    // One space between flags, kept inside the spans so the width math is the
+    // same arithmetic the renderer does.
+    let last = spans.len().saturating_sub(1);
+    for (i, span) in spans.iter_mut().enumerate() {
+        if i != last {
+            *span = Span::styled(format!("{} ", span.content), span.style);
+        }
+    }
+    spans
+}
+
+/// Name, current branch, the same state flags `slu repos` prints, and where the
+/// repo came from.
+fn repo_item(r: &RepoStatus, name_w: usize, branch_w: usize, state_w: usize) -> ListItem<'static> {
     let mut spans = vec![
         Span::styled(
             format!("  {:<name_w$}", truncate(&r.name, name_w)),
@@ -177,31 +239,16 @@ fn repo_item(r: &RepoStatus, name_w: usize, branch_w: usize) -> ListItem<'static
         ),
         Span::raw("  "),
     ];
-    if r.needs_attention() {
-        if r.dirty > 0 {
-            spans.push(Span::styled(
-                format!("✚{} ", r.dirty),
-                Style::default().fg(Color::Yellow),
-            ));
-        }
-        if r.ahead > 0 {
-            spans.push(Span::styled(
-                format!("↑{} ", r.ahead),
-                Style::default().fg(Color::Green),
-            ));
-        }
-        if r.behind > 0 {
-            spans.push(Span::styled(
-                format!("↓{} ", r.behind),
-                Style::default().fg(Color::Red),
-            ));
-        }
-    } else if r.has_upstream {
-        spans.push(Span::styled("✓ clean", Style::default().fg(Color::Green)));
-    } else {
+
+    let state = state_spans(r);
+    let pad = state_w.saturating_sub(state.iter().map(|s| s.content.chars().count()).sum());
+    spans.extend(state);
+    spans.push(Span::raw(" ".repeat(pad)));
+
+    if !r.origin.is_empty() {
         spans.push(Span::styled(
-            "✓ clean (no upstream)",
-            Style::default().add_modifier(Modifier::DIM),
+            format!("  {}", truncate(&r.origin, ORIGIN_MAX)),
+            Style::default().fg(Color::DarkGray),
         ));
     }
     ListItem::new(Line::from(spans))

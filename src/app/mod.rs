@@ -347,6 +347,7 @@ mod tests {
             dirty,
             ahead,
             behind: 0,
+            origin: "github.com:o/r".into(),
         }
     }
 

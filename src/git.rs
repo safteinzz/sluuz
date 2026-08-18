@@ -31,6 +31,9 @@ pub struct RepoStatus {
     pub dirty: usize,
     pub ahead: usize,
     pub behind: usize,
+    /// `origin`'s URL, shortened to `host:owner/repo`. Empty when the repo has
+    /// no origin.
+    pub origin: String,
 }
 
 impl RepoStatus {
@@ -83,6 +86,12 @@ pub fn repo_status(repo: &Path) -> RepoStatus {
         }
     }
 
+    // Only `origin`: it is what all but a handful of repos call their remote,
+    // and a second column of URLs would cost more room than it is worth.
+    let origin = git_capture(&path, &["config", "--get", "remote.origin.url"])
+        .map(|u| short_remote(&u))
+        .unwrap_or_default();
+
     RepoStatus {
         name: display_name(repo),
         path,
@@ -91,8 +100,55 @@ pub fn repo_status(repo: &Path) -> RepoStatus {
         dirty,
         ahead,
         behind,
+        origin,
     }
 }
+
+/// Shorten a remote URL to `host:owner/repo`, the part that identifies it.
+/// Handles the scp-like form git uses for SSH (`git@host:owner/repo.git`) and
+/// real URLs (`https://host/owner/repo.git`, `ssh://git@host:22/owner/repo`).
+/// Anything else (a filesystem path, mostly) comes back as it went in, since
+/// there is no host to pull out of it.
+pub fn short_remote(url: &str) -> String {
+    let url = url.trim();
+    let url = url.strip_suffix('/').unwrap_or(url);
+    let stripped = url.strip_suffix(".git").unwrap_or(url);
+
+    // A real URL: <scheme>://[user@]host[:port]/path
+    if let Some((_, rest)) = stripped.split_once("://") {
+        let rest = rest.rsplit('@').next().unwrap_or(rest); // drop any userinfo
+        let Some((hostport, path)) = rest.split_once('/') else {
+            return stripped.to_string();
+        };
+        // Keep the host, drop the port: it identifies the server, not the repo.
+        let host = hostport.split(':').next().unwrap_or(hostport);
+        return format!("{host}:{path}");
+    }
+
+    // The scp-like form: [user@]host:path — but not a Windows drive (C:\…).
+    if let Some((hostpart, path)) = stripped.split_once(':')
+        && !path.starts_with('\\')
+        && !path.starts_with('/')
+        && hostpart.contains('.')
+    {
+        let host = hostpart.rsplit('@').next().unwrap_or(hostpart);
+        return format!("{host}:{path}");
+    }
+
+    // Not a URL at all, so it is a filesystem path: a mirror, a bare repo on a
+    // share, a submodule's relative origin. Those identify by their tail, and
+    // the head is usually a prefix every repo in the tree shares, so keep the
+    // last two components.
+    let parts: Vec<&str> = stripped
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    if parts.len() > 2 {
+        return format!("…/{}", parts[parts.len() - 2..].join("/"));
+    }
+    stripped.to_string()
+}
+
 
 /// Get a human-readable repo name from its path (its directory name).
 pub fn display_name(repo: &Path) -> String {
@@ -135,5 +191,70 @@ pub fn git_run(repo: &str, args: &[&str]) -> (bool, String) {
             (output.status.success(), combined.trim().to_string())
         }
         Err(e) => (false, e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_remote;
+
+    #[test]
+    fn the_ssh_form_git_prints_by_default() {
+        assert_eq!(
+            short_remote("git@github.com:safteinzz/sluuz.git"),
+            "github.com:safteinzz/sluuz"
+        );
+        assert_eq!(
+            short_remote("git@gitlab.com:safteinzz/sluuz.git"),
+            "gitlab.com:safteinzz/sluuz"
+        );
+    }
+
+    #[test]
+    fn https_urls_lose_the_scheme_and_the_dot_git() {
+        assert_eq!(
+            short_remote("https://gitlab.com/safteinzz/sluuz.git"),
+            "gitlab.com:safteinzz/sluuz"
+        );
+        assert_eq!(
+            short_remote("https://github.com/safteinzz/sluuz"),
+            "github.com:safteinzz/sluuz"
+        );
+    }
+
+    #[test]
+    fn a_url_loses_its_credentials_and_its_port() {
+        assert_eq!(
+            short_remote("https://token@github.com/o/r.git"),
+            "github.com:o/r"
+        );
+        assert_eq!(short_remote("ssh://git@host.example:2222/o/r.git"), "host.example:o/r");
+    }
+
+    #[test]
+    fn a_self_hosted_path_keeps_every_segment() {
+        assert_eq!(
+            short_remote("https://git.example.com/team/group/sub/repo.git"),
+            "git.example.com:team/group/sub/repo"
+        );
+    }
+
+    #[test]
+    fn a_local_remote_is_named_by_its_tail() {
+        // Every repo in a tree of mirrors shares the head of this path, so the
+        // end is the only part that says which one it is.
+        assert_eq!(
+            short_remote("/home/me/projects/sluuz/test-playground/crates/vibox.git"),
+            "…/crates/vibox"
+        );
+        assert_eq!(short_remote("../mirror/repo.git"), "…/mirror/repo");
+        // Nothing was dropped here, so there is no ellipsis to earn.
+        assert_eq!(short_remote("/srv/repo.git"), "/srv/repo");
+    }
+
+    #[test]
+    fn something_unparseable_comes_back_as_it_went_in() {
+        assert_eq!(short_remote("weird"), "weird");
+        assert_eq!(short_remote(""), "");
     }
 }
