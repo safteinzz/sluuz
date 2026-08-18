@@ -37,6 +37,23 @@ impl Scope {
     }
 }
 
+/// A repo's path relative to the directory being scanned (`crates/vibox`), or
+/// its plain name when it sits directly under it.
+fn relative_name(repo: &Path, base: &Path) -> String {
+    repo.strip_prefix(base)
+        .ok()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        // A path outside the scan root can't happen (find_repos walks under it),
+        // but fall back to the bare directory name rather than a full path.
+        .unwrap_or_else(|| {
+            repo.file_name()
+                .unwrap_or(repo.as_os_str())
+                .to_string_lossy()
+                .into_owned()
+        })
+}
+
 impl App {
     /// Find every repo under `base` and read its state. Statuses are read in
     /// parallel: it is one `git status` per repo, and a tree of them is slow
@@ -44,6 +61,12 @@ impl App {
     pub(super) fn load_repos(&mut self, base: &Path, depth: usize) {
         let found = find_repos(base, depth);
         let mut repos: Vec<RepoStatus> = found.par_iter().map(|r| repo_status(r)).collect();
+        // Label each repo by where it sits under the scan root, not by its bare
+        // directory name: a tree of them routinely holds two `work`s, and a
+        // basename alone gives no way to tell which one you are about to open.
+        for (repo, path) in repos.iter_mut().zip(&found) {
+            repo.name = relative_name(path, base);
+        }
         repos.sort_by(|a, b| a.name.cmp(&b.name));
         self.repos = repos;
     }
@@ -68,4 +91,41 @@ impl App {
         self.rescope_branches();
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relative_name;
+    use std::path::Path;
+
+    #[test]
+    fn a_repo_under_the_root_keeps_its_plain_name() {
+        assert_eq!(relative_name(Path::new("pg/hscroll"), Path::new("pg")), "hscroll");
+    }
+
+    #[test]
+    fn a_nested_repo_is_named_by_its_path() {
+        // Two `work` repos in one tree are only telling apart by where they sit.
+        assert_eq!(relative_name(Path::new("pg/itidy/work"), Path::new("pg")), "itidy/work");
+        assert_eq!(
+            relative_name(Path::new("pg/pushstate/work"), Path::new("pg")),
+            "pushstate/work"
+        );
+    }
+
+    #[test]
+    fn scanning_the_current_directory_drops_the_dot() {
+        assert_eq!(relative_name(Path::new("./crates/vibox"), Path::new(".")), "crates/vibox");
+        assert_eq!(relative_name(Path::new("./hscroll"), Path::new(".")), "hscroll");
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_root_changes_nothing() {
+        assert_eq!(relative_name(Path::new("/pg/crates/vibox"), Path::new("/pg/")), "crates/vibox");
+    }
+
+    #[test]
+    fn a_path_outside_the_root_falls_back_to_its_name() {
+        assert_eq!(relative_name(Path::new("/elsewhere/vibox"), Path::new("/pg")), "vibox");
+    }
 }

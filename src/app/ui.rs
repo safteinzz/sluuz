@@ -14,8 +14,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 use ratatui::Frame;
 
-/// Width the repo and branch name columns are padded to.
+/// Width the branch name column is padded to, and the cap on the repo one,
+/// which grows to fit the paths actually on screen.
 const NAME_W: usize = 28;
+const REPO_NAME_MAX: usize = 40;
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let areas = Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
@@ -139,6 +141,14 @@ fn commits_label(app: &App) -> String {
 // ── row renderers ───────────────────────────────────────────────────────────
 
 fn repo_items(app: &App) -> Vec<ListItem<'static>> {
+    let name_w = app
+        .rsel
+        .visible
+        .iter()
+        .map(|&i| app.repos[i].name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(1, REPO_NAME_MAX);
     let branch_w = app
         .rsel
         .visible
@@ -150,15 +160,15 @@ fn repo_items(app: &App) -> Vec<ListItem<'static>> {
     app.rsel
         .visible
         .iter()
-        .map(|&i| repo_item(&app.repos[i], branch_w))
+        .map(|&i| repo_item(&app.repos[i], name_w, branch_w))
         .collect()
 }
 
 /// Name, current branch, then the same state flags `slu repos` prints.
-fn repo_item(r: &RepoStatus, branch_w: usize) -> ListItem<'static> {
+fn repo_item(r: &RepoStatus, name_w: usize, branch_w: usize) -> ListItem<'static> {
     let mut spans = vec![
         Span::styled(
-            format!("  {:<NAME_W$}", truncate(&r.name, NAME_W)),
+            format!("  {:<name_w$}", truncate(&r.name, name_w)),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::styled(
