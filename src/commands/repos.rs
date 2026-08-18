@@ -4,7 +4,7 @@
 //! far ahead/behind its upstream it is — so "which of my repos have uncommitted
 //! or unpushed work?" is one command instead of cd-ing through each.
 
-use crate::git::{display_name, find_repos, git_capture};
+use crate::git::{find_repos, repo_status, RepoStatus};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -24,33 +24,10 @@ pub struct Args {
     pub dirty: bool,
 }
 
-struct RepoStatus {
-    name: String,
-    branch: String,
-    has_upstream: bool,
-    dirty: usize,
-    ahead: usize,
-    behind: usize,
-}
-
-impl RepoStatus {
-    /// Whether the repo needs attention: uncommitted, unpushed, or unpulled.
-    fn needs_attention(&self) -> bool {
-        self.dirty > 0 || self.ahead > 0 || self.behind > 0
-    }
-}
-
 pub fn run(args: Args) {
     let repos = find_repos(&args.path, args.depth);
 
-    let mut statuses: Vec<RepoStatus> = repos
-        .par_iter()
-        .filter_map(|repo| {
-            let name = display_name(repo);
-            let repo_str = repo.to_str()?;
-            Some(repo_status(name, repo_str))
-        })
-        .collect();
+    let mut statuses: Vec<RepoStatus> = repos.par_iter().map(|r| repo_status(r)).collect();
 
     statuses.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -118,47 +95,5 @@ fn state(s: &RepoStatus) -> String {
         "✓ clean".green().to_string()
     } else {
         "✓ clean (no upstream)".dimmed().to_string()
-    }
-}
-
-/// Read one repo's status via `git status --porcelain=2 --branch`, which packs
-/// branch, upstream, ahead/behind, and changed files into one machine-readable
-/// listing.
-fn repo_status(name: String, repo: &str) -> RepoStatus {
-    let out = git_capture(repo, &["status", "--porcelain=2", "--branch"]).unwrap_or_default();
-
-    let mut branch = "(detached)".to_string();
-    let mut has_upstream = false;
-    let mut ahead = 0usize;
-    let mut behind = 0usize;
-    let mut dirty = 0usize;
-
-    for line in out.lines() {
-        if let Some(rest) = line.strip_prefix("# branch.head ") {
-            branch = rest.to_string();
-        } else if line.starts_with("# branch.upstream ") {
-            has_upstream = true;
-        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
-            // "+<ahead> -<behind>"
-            for tok in rest.split_whitespace() {
-                if let Some(a) = tok.strip_prefix('+') {
-                    ahead = a.parse().unwrap_or(0);
-                } else if let Some(b) = tok.strip_prefix('-') {
-                    behind = b.parse().unwrap_or(0);
-                }
-            }
-        } else if !line.starts_with('#') && !line.is_empty() {
-            // Any non-header line is a changed/untracked entry.
-            dirty += 1;
-        }
-    }
-
-    RepoStatus {
-        name,
-        branch,
-        has_upstream,
-        dirty,
-        ahead,
-        behind,
     }
 }

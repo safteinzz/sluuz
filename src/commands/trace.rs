@@ -6,11 +6,8 @@
 //! author). `--graph` keeps git's own commit graph (which we don't try to
 //! out-render) but enriches the per-commit line.
 
-use crate::git::git_capture;
+use crate::git::{git_capture, SEP};
 use colored::Colorize;
-
-/// ASCII unit separator — a field delimiter that won't appear in a subject.
-const SEP: char = '\u{1f}';
 
 /// Committer name is capped at this width (long names get truncated).
 const NAME_MAX: usize = 18;

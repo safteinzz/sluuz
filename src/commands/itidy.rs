@@ -14,11 +14,10 @@
 //!
 //! For the non-interactive, multi-repo view, use `slu tidy`.
 
-use crate::git::{git_capture, git_run};
-use crate::tui::{
-    is_back, is_down, is_left, is_right, is_up, list_scrollbar, norm_esc, pane_block,
-    pop_keyboard_enhancement, push_keyboard_enhancement, X_MOVE, Y_MOVE, SEP,
-};
+use crate::git::{git_capture, git_run, SEP};
+use crate::tui::{pop_keyboard_enhancement, push_keyboard_enhancement};
+use crate::tui::input::{is_back, is_down, is_left, is_right, is_up, norm_esc, X_MOVE, Y_MOVE};
+use crate::tui::widgets::{list_scrollbar, pane_block};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -37,17 +36,38 @@ struct Gone {
     author: String,
 }
 
+/// Everything the view holds: the branches it found, where the cursor is, and
+/// whether the confirm popup is up.
+struct App {
+    branches: Vec<Gone>,
+    sel: usize,
+    state: ListState,
+    /// The delete-confirmation popup: None when closed, Some(yes) when open,
+    /// where `yes` is whether the Yes button (left) is highlighted.
+    confirm: Option<bool>,
+    /// Last action's outcome, shown in the footer (ok?, message).
+    msg: Option<(bool, String)>,
+}
+
 pub fn run(_args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu itidy needs an interactive terminal — use `slu tidy` for the scriptable view");
         return;
     }
 
-    let branches = load_gone();
+    let mut state = ListState::default();
+    state.select(Some(0));
+    let mut app = App {
+        branches: load_gone(),
+        sel: 0,
+        state,
+        confirm: None,
+        msg: None,
+    };
 
     let mut terminal = ratatui::init();
     let enhanced = push_keyboard_enhancement();
-    let result = event_loop(&mut terminal, branches);
+    let result = app.event_loop(&mut terminal);
     if enhanced {
         pop_keyboard_enhancement();
     }
@@ -58,120 +78,116 @@ pub fn run(_args: Args) {
     }
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, mut branches: Vec<Gone>) -> io::Result<()> {
-    let mut sel = 0usize;
-    let mut state = ListState::default();
-    state.select(Some(0));
-    // The delete-confirmation popup: None when closed, Some(yes) when open, where
-    // `yes` is whether the Yes button (left) is highlighted. Opens on No.
-    let mut confirm: Option<bool> = None;
-    // Last action's outcome, shown in the footer (ok?, message).
-    let mut msg: Option<(bool, String)> = None;
+impl App {
+    fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        loop {
+            terminal.draw(|frame| draw(frame, self))?;
 
-    loop {
-        terminal.draw(|frame| draw(frame, &branches, sel, &mut state, &msg, confirm))?;
+            let Event::Key(key) = event::read()? else {
+                continue;
+            };
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let code = norm_esc(key.code, ctrl);
 
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
+            // Ctrl-C always quits, even with the popup open.
+            if ctrl && code == KeyCode::Char('c') {
+                break;
+            }
+            if self.on_key(code) {
+                break;
+            }
         }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let code = norm_esc(key.code, ctrl);
+        Ok(())
+    }
 
-        // Ctrl-C always quits, even with the popup open.
-        if ctrl && code == KeyCode::Char('c') {
-            break;
-        }
-
-        if let Some(yes) = confirm {
+    /// Handle one key. Returns true when the app should quit.
+    fn on_key(&mut self, code: KeyCode) -> bool {
+        if let Some(yes) = self.confirm {
             // Popup open. Yes is on the left, No on the right.
             if is_left(code) {
-                confirm = Some(true);
+                self.confirm = Some(true);
             } else if is_right(code) {
-                confirm = Some(false);
+                self.confirm = Some(false);
             } else if code == KeyCode::Char('y') {
-                msg = delete(&mut branches, &mut sel, &mut state);
-                confirm = None;
+                self.delete();
+                self.confirm = None;
             } else if code == KeyCode::Enter {
                 if yes {
-                    msg = delete(&mut branches, &mut sel, &mut state);
+                    self.delete();
                 }
-                confirm = None;
+                self.confirm = None;
             } else if is_back(code) || matches!(code, KeyCode::Char('q' | 'n')) {
-                confirm = None;
+                self.confirm = None;
             }
-            continue;
+            return false;
         }
 
         // No popup: navigate / open confirm / quit.
         if matches!(code, KeyCode::Char('q')) || is_back(code) {
-            break;
-        } else if is_down(code) && sel + 1 < branches.len() {
-            sel += 1;
-            state.select(Some(sel));
-            msg = None;
-        } else if is_up(code) && sel > 0 {
-            sel -= 1;
-            state.select(Some(sel));
-            msg = None;
-        } else if code == KeyCode::Enter && !branches.is_empty() {
-            confirm = Some(false); // default to No
-            msg = None;
+            return true;
+        } else if is_down(code) && self.sel + 1 < self.branches.len() {
+            self.sel += 1;
+            self.state.select(Some(self.sel));
+            self.msg = None;
+        } else if is_up(code) && self.sel > 0 {
+            self.sel -= 1;
+            self.state.select(Some(self.sel));
+            self.msg = None;
+        } else if code == KeyCode::Enter && !self.branches.is_empty() {
+            self.confirm = Some(false); // default to No
+            self.msg = None;
         }
+        false
     }
-    Ok(())
+
+    /// Force-delete the selected branch. On success drop it from the list and
+    /// keep the selection in range; either way leave a footer message. Force
+    /// (`-D`) is deliberate: the user has explicitly confirmed, and
+    /// gone-upstream branches often aren't seen as locally merged (squash and
+    /// rebase merges), so `-d` would just refuse them.
+    fn delete(&mut self) {
+        let Some(target) = self.branches.get(self.sel).map(|b| b.name.clone()) else {
+            return;
+        };
+        let (ok, out) = git_run(".", &["branch", "-D", &target]);
+
+        self.msg = if ok {
+            self.branches.remove(self.sel);
+            if self.sel >= self.branches.len() {
+                self.sel = self.branches.len().saturating_sub(1);
+            }
+            self.state
+                .select((!self.branches.is_empty()).then_some(self.sel));
+            Some((true, format!("deleted {target}")))
+        } else {
+            Some((false, format!("{target}: {}", first_line(&out))))
+        };
+    }
 }
 
-/// Force-delete the selected branch. On success drop it from the list and keep
-/// the selection in range; either way return a footer message. Force (`-D`) is
-/// deliberate: the user has explicitly confirmed, and gone-upstream branches
-/// often aren't seen as locally merged (squash/rebase merges), so `-d` would
-/// just refuse them.
-fn delete(branches: &mut Vec<Gone>, sel: &mut usize, state: &mut ListState) -> Option<(bool, String)> {
-    let target = branches.get(*sel)?.name.clone();
-    let (ok, out) = git_run(".", &["branch", "-D", &target]);
-
-    if ok {
-        branches.remove(*sel);
-        if *sel >= branches.len() {
-            *sel = branches.len().saturating_sub(1);
-        }
-        state.select((!branches.is_empty()).then_some(*sel));
-        Some((true, format!("deleted {target}")))
-    } else {
-        Some((false, format!("{target}: {}", first_line(&out))))
-    }
-}
-
-fn draw(
-    frame: &mut ratatui::Frame,
-    branches: &[Gone],
-    sel: usize,
-    state: &mut ListState,
-    msg: &Option<(bool, String)>,
-    confirm: Option<bool>,
-) {
+fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let areas =
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(frame.area());
 
-    let title = if branches.is_empty() {
+    let title = if app.branches.is_empty() {
         " no branches with a deleted upstream — nothing to tidy ".to_string()
     } else {
-        format!(" gone branches  {}/{} ", sel + 1, branches.len())
+        format!(" gone branches  {}/{} ", app.sel + 1, app.branches.len())
     };
-    let list = List::new(branches.iter().map(gone_item).collect::<Vec<_>>())
+    let list = List::new(app.branches.iter().map(gone_item).collect::<Vec<_>>())
         .block(pane_block(title, true))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("› ");
-    frame.render_stateful_widget(list, areas[0], state);
-    list_scrollbar(frame, areas[0], branches.len(), state.offset());
+    frame.render_stateful_widget(list, areas[0], &mut app.state);
+    list_scrollbar(frame, areas[0], app.branches.len(), app.state.offset());
 
-    frame.render_widget(footer(msg), areas[1]);
+    frame.render_widget(footer(&app.msg), areas[1]);
 
-    if let Some(yes) = confirm
-        && let Some(b) = branches.get(sel)
+    if let Some(yes) = app.confirm
+        && let Some(b) = app.branches.get(app.sel)
     {
         confirm_popup(frame, &b.name, yes);
     }

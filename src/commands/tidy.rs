@@ -7,8 +7,7 @@
 //! Branches still alive on the remote, or that never had an upstream, are left
 //! alone. This is the non-interactive, multi-repo view; `slu itidy` is the TUI.
 
-use crate::git::{display_name, find_repos, git_capture};
-use crate::tui::SEP;
+use crate::git::{display_name, find_repos, git_capture, SEP};
 use colored::Colorize;
 use std::path::PathBuf;
 

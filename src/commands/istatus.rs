@@ -10,11 +10,15 @@
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
 use crate::git::{git_capture, git_capture_raw, git_run};
+use crate::tui::difftool::run_difftool;
+use crate::tui::highlight::{prepare_diff, render_prepared, RenderedDiff};
+use crate::tui::input::{
+    is_down, is_left, is_right, is_up, norm_esc, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE,
+};
+use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, diff_hscrollbar, diff_scrollbar, half_page, is_down, is_left,
-    is_right, is_up, list_scrollbar, norm_esc, pane_block, pane_height, pane_width, pop_keyboard_enhancement,
-    prepare_diff, push_keyboard_enhancement, render_prepared, run_difftool, RenderedDiff,
-    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE,
+    clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
+    push_keyboard_enhancement,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -23,6 +27,12 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::DefaultTerminal;
 use std::io::{self, IsTerminal};
+
+/// Rows a Ctrl-j/k moves the diff, columns a Ctrl-h/l pans it, and the PgUp/PgDn
+/// jump.
+const SCROLL_STEP: u16 = 3;
+const PAN_STEP: u16 = 8;
+const PAGE_STEP: u16 = 10;
 
 #[derive(clap::Args)]
 pub struct Args {}
@@ -76,6 +86,26 @@ impl Entry {
     }
 }
 
+/// Everything the view holds. `root` is on it because every git call needs it,
+/// which is what used to make the helpers below take four arguments each.
+struct App {
+    root: String,
+    enhanced: bool,
+    width: u16,
+    entries: Vec<Entry>,
+    /// Indices into `entries` that the current scope keeps.
+    visible: Vec<usize>,
+    sel: usize,
+    scope_idx: usize,
+    state: ListState,
+    /// Transient status line (a difftool result, mostly).
+    msg: Option<String>,
+    prepared: RenderedDiff,
+    diff: Text<'static>,
+    diff_scroll: u16,
+    diff_hscroll: u16,
+}
+
 pub fn run(_args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu istatus needs an interactive terminal — use `git status` instead");
@@ -92,10 +122,28 @@ pub fn run(_args: Args) {
         }
     };
 
+    let mut app = App {
+        root,
+        enhanced: false,
+        width: 120,
+        entries: Vec::new(),
+        visible: Vec::new(),
+        sel: 0,
+        scope_idx: 1, // default: All
+        state: ListState::default(),
+        msg: None,
+        prepared: RenderedDiff::default(),
+        diff: Text::default(),
+        diff_scroll: 0,
+        diff_hscroll: 0,
+    };
+
     let mut terminal = ratatui::init();
-    let enhanced = push_keyboard_enhancement();
-    let result = event_loop(&mut terminal, &root, enhanced);
-    if enhanced {
+    app.enhanced = push_keyboard_enhancement();
+    app.width = pane_width(&terminal);
+    app.reload();
+    let result = app.event_loop(&mut terminal);
+    if app.enhanced {
         pop_keyboard_enhancement();
     }
     ratatui::restore();
@@ -105,199 +153,197 @@ pub fn run(_args: Args) {
     }
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, root: &str, enhanced: bool) -> io::Result<()> {
-    let mut width = pane_width(terminal);
-    let mut entries = load_status(root);
-    let mut scope_idx = 1usize; // default: All
-    let mut sel = 0usize;
-    let mut msg: Option<String> = None; // transient status (e.g. difftool result)
+impl App {
+    fn scope(&self) -> Scope {
+        SCOPES[self.scope_idx]
+    }
 
-    let mut visible = visible_indices(&entries, SCOPES[scope_idx]);
-    let mut prepared = RenderedDiff::default();
-    let mut diff = Text::default();
-    let mut diff_scroll = 0u16;
-    let mut diff_hscroll = 0u16;
-    refresh_diff(root, &entries, &visible, sel, SCOPES[scope_idx], width, &mut prepared, &mut diff);
+    /// The entry the cursor is on.
+    fn current(&self) -> Option<&Entry> {
+        self.visible.get(self.sel).map(|&i| &self.entries[i])
+    }
 
-    let mut state = ListState::default();
-    state.select((!visible.is_empty()).then_some(0));
+    /// Re-read the working tree, then re-filter and re-diff.
+    fn reload(&mut self) {
+        self.entries = load_status(&self.root);
+        self.rescope();
+    }
 
-    loop {
-        let scope = SCOPES[scope_idx];
-        terminal.draw(|frame| {
-            draw(
-                frame,
-                View {
-                    entries: &entries,
-                    visible: &visible,
-                    sel,
-                    scope,
-                    diff: &diff,
-                    diff_scroll,
-                    prepared: &prepared,
-                    diff_hscroll,
-                    msg: msg.as_deref(),
-                },
-                &mut state,
-            )
-        })?;
+    /// Re-filter for the current scope, keep the cursor in range, and refresh
+    /// the diff pane under it.
+    fn rescope(&mut self) {
+        self.visible = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.in_scope(self.scope()))
+            .map(|(i, _)| i)
+            .collect();
+        if self.sel >= self.visible.len() {
+            self.sel = self.visible.len().saturating_sub(1);
+        }
+        self.state.select((!self.visible.is_empty()).then_some(self.sel));
+        self.diff_scroll = 0;
+        self.diff_hscroll = 0;
+        self.refresh_diff();
+    }
 
-        match event::read()? {
-            Event::Resize(_, _) => {
-                let w = pane_width(terminal);
-                if w != width {
-                    width = w;
-                    diff = render_prepared(&prepared, width, diff_hscroll);
-                }
+    /// Highlight the selected file's diff. This is the expensive syntect pass,
+    /// so it runs on selection changes only, never on a scroll.
+    fn refresh_diff(&mut self) {
+        match self.current() {
+            Some(entry) => {
+                let raw = diff_for(&self.root, entry, self.scope());
+                self.prepared = prepare_diff(&raw);
+                self.diff = render_prepared(&self.prepared, self.width, 0);
             }
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                let code = norm_esc(key.code, ctrl);
-                msg = None; // any keypress clears a stale status message
-
-                if matches!(code, KeyCode::Char('q') | KeyCode::Esc)
-                    || (ctrl && code == KeyCode::Char('c'))
-                {
-                    break;
-                }
-
-                let half = half_page(terminal);
-                let mut dirty = false; // selection/scope changed → reload diff
-                let mut reload = false; // working tree changed → reload status
-
-                if ctrl && is_down(code) {
-                    diff_scroll = diff_scroll.saturating_add(3);
-                } else if ctrl && is_up(code) {
-                    diff_scroll = diff_scroll.saturating_sub(3);
-                } else if ctrl && code == KeyCode::Char('d') {
-                    diff_scroll = diff_scroll.saturating_add(half);
-                } else if ctrl && code == KeyCode::Char('u') {
-                    diff_scroll = diff_scroll.saturating_sub(half);
-                } else if ctrl && is_right(code) {
-                    diff_hscroll = clamp_hscroll(
-                        diff_hscroll.saturating_add(8),
-                        prepared.max_line(),
-                        prepared.cell_width(width),
-                    );
-                    diff = render_prepared(&prepared, width, diff_hscroll);
-                } else if ctrl && is_left(code) {
-                    diff_hscroll = diff_hscroll.saturating_sub(8);
-                    diff = render_prepared(&prepared, width, diff_hscroll);
-                } else if code == KeyCode::PageDown {
-                    diff_scroll = diff_scroll.saturating_add(10);
-                } else if code == KeyCode::PageUp {
-                    diff_scroll = diff_scroll.saturating_sub(10);
-                } else if is_down(code) && sel + 1 < visible.len() {
-                    sel += 1;
-                    dirty = true;
-                } else if is_up(code) && sel > 0 {
-                    sel -= 1;
-                    dirty = true;
-                } else if !ctrl && is_left(code) && scope_idx > 0 {
-                    scope_idx -= 1;
-                    sel = 0;
-                    dirty = true;
-                } else if !ctrl && is_right(code) && scope_idx + 1 < SCOPES.len() {
-                    scope_idx += 1;
-                    sel = 0;
-                    dirty = true;
-                } else if code == KeyCode::Char('s') {
-                    reload = stage_selected(root, &entries, &visible, sel);
-                } else if code == KeyCode::Char('u') {
-                    reload = unstage_selected(root, &entries, &visible, sel);
-                } else if code == KeyCode::Char(' ') {
-                    reload = toggle_selected(root, &entries, &visible, sel);
-                } else if code == KeyCode::Char('r') {
-                    reload = true;
-                } else if code == KeyCode::Enter {
-                    // Open the selected file in the user's difftool, matching the
-                    // comparison the pane shows.
-                    let target = visible.get(sel).map(|&i| {
-                        let e = &entries[i];
-                        let cached = matches!(scope, Scope::Staged)
-                            || (matches!(scope, Scope::All) && !e.unstaged());
-                        (e.path.clone(), e.untracked(), cached)
-                    });
-                    if let Some((path, untracked, cached)) = target {
-                        if untracked {
-                            msg = Some("untracked — nothing to compare".to_string());
-                        } else {
-                            let dt = if cached {
-                                run_difftool(terminal, enhanced, root, &["--cached", "--", &path])
-                            } else {
-                                run_difftool(terminal, enhanced, root, &["--", &path])
-                            };
-                            width = pane_width(terminal);
-                            if !dt.is_empty() {
-                                msg = Some(dt);
-                            }
-                            reload = true; // a difftool edit may have changed the file
-                        }
-                    }
-                }
-
-                if reload {
-                    entries = load_status(root);
-                    dirty = true;
-                }
-                if dirty {
-                    visible = visible_indices(&entries, SCOPES[scope_idx]);
-                    if sel >= visible.len() {
-                        sel = visible.len().saturating_sub(1);
-                    }
-                    state.select((!visible.is_empty()).then_some(sel));
-                    diff_scroll = 0;
-                    diff_hscroll = 0;
-                    refresh_diff(
-                        root,
-                        &entries,
-                        &visible,
-                        sel,
-                        SCOPES[scope_idx],
-                        width,
-                        &mut prepared,
-                        &mut diff,
-                    );
-                }
-                diff_scroll = clamp_scroll(diff_scroll, diff.lines.len(), pane_height(terminal));
+            None => {
+                self.prepared = RenderedDiff::default();
+                self.diff = Text::default();
             }
-            _ => {}
         }
     }
-    Ok(())
-}
 
-/// Indices of `entries` that belong in `scope`, preserving order.
-fn visible_indices(entries: &[Entry], scope: Scope) -> Vec<usize> {
-    entries
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.in_scope(scope))
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// Recompute the diff for the currently selected file (expensive syntect pass).
-#[allow(clippy::too_many_arguments)]
-fn refresh_diff(
-    root: &str,
-    entries: &[Entry],
-    visible: &[usize],
-    sel: usize,
-    scope: Scope,
-    width: u16,
-    prepared: &mut RenderedDiff,
-    diff: &mut Text<'static>,
-) {
-    match visible.get(sel).map(|&i| &entries[i]) {
-        Some(entry) => {
-            let raw = diff_for(root, entry, scope);
-            *prepared = prepare_diff(&raw);
-            *diff = render_prepared(prepared, width, 0);
+    /// Run a git command against the selected file, reporting whether the
+    /// working tree changed.
+    fn on_current(&self, args: &[&str]) -> bool {
+        match self.current() {
+            Some(e) => {
+                let mut argv = args.to_vec();
+                argv.extend_from_slice(&["--", &e.path]);
+                git_run(&self.root, &argv).0
+            }
+            None => false,
         }
-        None => {
-            *prepared = RenderedDiff::default();
-            *diff = Text::default();
+    }
+
+    /// Space: stage a file that has unstaged changes, else unstage it.
+    fn toggle(&self) -> bool {
+        match self.current() {
+            Some(e) if e.unstaged() => self.on_current(&["add"]),
+            Some(_) => self.on_current(&["restore", "--staged"]),
+            None => false,
+        }
+    }
+
+    /// Open the selected file in the user's difftool, matching the comparison
+    /// the pane shows. Returns whether the tree may have changed under it.
+    fn difftool(&mut self, terminal: &mut DefaultTerminal) -> bool {
+        let Some(e) = self.current() else {
+            return false;
+        };
+        let scope = self.scope();
+        let cached = scope == Scope::Staged || (scope == Scope::All && !e.unstaged());
+        let (path, untracked) = (e.path.clone(), e.untracked());
+
+        if untracked {
+            self.msg = Some("untracked — nothing to compare".to_string());
+            return false;
+        }
+        let args: &[&str] = if cached {
+            &["--cached", "--"]
+        } else {
+            &["--"]
+        };
+        let mut argv = args.to_vec();
+        argv.push(&path);
+        let dt = run_difftool(terminal, self.enhanced, &self.root, &argv);
+        self.width = pane_width(terminal);
+        if !dt.is_empty() {
+            self.msg = Some(dt);
+        }
+        true // a difftool edit may have changed the file
+    }
+
+    fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        loop {
+            terminal.draw(|frame| draw(frame, self))?;
+
+            match event::read()? {
+                Event::Resize(_, _) => {
+                    let w = pane_width(terminal);
+                    if w != self.width {
+                        self.width = w;
+                        self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
+                    }
+                }
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    let code = norm_esc(key.code, ctrl);
+                    self.msg = None; // any keypress clears a stale status message
+
+                    if matches!(code, KeyCode::Char('q') | KeyCode::Esc)
+                        || (ctrl && code == KeyCode::Char('c'))
+                    {
+                        break;
+                    }
+                    self.on_key(code, ctrl, terminal);
+                    self.diff_scroll =
+                        clamp_scroll(self.diff_scroll, self.diff.lines.len(), pane_height(terminal));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn on_key(&mut self, code: KeyCode, ctrl: bool, terminal: &mut DefaultTerminal) {
+        let half = half_page(terminal);
+        let mut moved = false; // selection or scope changed → re-diff
+        let mut reload = false; // working tree changed → re-read status
+
+        if ctrl && is_down(code) {
+            self.diff_scroll = self.diff_scroll.saturating_add(SCROLL_STEP);
+        } else if ctrl && is_up(code) {
+            self.diff_scroll = self.diff_scroll.saturating_sub(SCROLL_STEP);
+        } else if ctrl && code == KeyCode::Char('d') {
+            self.diff_scroll = self.diff_scroll.saturating_add(half);
+        } else if ctrl && code == KeyCode::Char('u') {
+            self.diff_scroll = self.diff_scroll.saturating_sub(half);
+        } else if ctrl && is_right(code) {
+            self.diff_hscroll = clamp_hscroll(
+                self.diff_hscroll.saturating_add(PAN_STEP),
+                self.prepared.max_line(),
+                self.prepared.cell_width(self.width),
+            );
+            self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
+        } else if ctrl && is_left(code) {
+            self.diff_hscroll = self.diff_hscroll.saturating_sub(PAN_STEP);
+            self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
+        } else if code == KeyCode::PageDown {
+            self.diff_scroll = self.diff_scroll.saturating_add(PAGE_STEP);
+        } else if code == KeyCode::PageUp {
+            self.diff_scroll = self.diff_scroll.saturating_sub(PAGE_STEP);
+        } else if is_down(code) && self.sel + 1 < self.visible.len() {
+            self.sel += 1;
+            moved = true;
+        } else if is_up(code) && self.sel > 0 {
+            self.sel -= 1;
+            moved = true;
+        } else if !ctrl && is_left(code) && self.scope_idx > 0 {
+            self.scope_idx -= 1;
+            self.sel = 0;
+            moved = true;
+        } else if !ctrl && is_right(code) && self.scope_idx + 1 < SCOPES.len() {
+            self.scope_idx += 1;
+            self.sel = 0;
+            moved = true;
+        } else if code == KeyCode::Char('s') {
+            reload = self.on_current(&["add"]);
+        } else if code == KeyCode::Char('u') {
+            reload = self.on_current(&["restore", "--staged"]);
+        } else if code == KeyCode::Char(' ') {
+            reload = self.toggle();
+        } else if code == KeyCode::Char('r') {
+            reload = true;
+        } else if code == KeyCode::Enter {
+            reload = self.difftool(terminal);
+        }
+
+        if reload {
+            self.reload();
+        } else if moved {
+            self.rescope();
         }
     }
 }
@@ -324,31 +370,6 @@ fn diff_for(root: &str, entry: &Entry, scope: Scope) -> String {
         &["diff", "--", &entry.path]
     };
     git_capture(root, args).unwrap_or_default()
-}
-
-fn stage_selected(root: &str, entries: &[Entry], visible: &[usize], sel: usize) -> bool {
-    if let Some(e) = visible.get(sel).map(|&i| &entries[i]) {
-        git_run(root, &["add", "--", &e.path]).0
-    } else {
-        false
-    }
-}
-
-fn unstage_selected(root: &str, entries: &[Entry], visible: &[usize], sel: usize) -> bool {
-    if let Some(e) = visible.get(sel).map(|&i| &entries[i]) {
-        git_run(root, &["restore", "--staged", "--", &e.path]).0
-    } else {
-        false
-    }
-}
-
-/// Space: stage a file that has unstaged changes, else unstage it.
-fn toggle_selected(root: &str, entries: &[Entry], visible: &[usize], sel: usize) -> bool {
-    match visible.get(sel).map(|&i| &entries[i]) {
-        Some(e) if e.unstaged() => git_run(root, &["add", "--", &e.path]).0,
-        Some(e) => git_run(root, &["restore", "--staged", "--", &e.path]).0,
-        None => false,
-    }
 }
 
 /// Parse `git status --porcelain -z` into entries. `-z` NUL-separates records
@@ -383,58 +404,50 @@ fn load_status(root: &str) -> Vec<Entry> {
     entries
 }
 
-struct View<'a> {
-    entries: &'a [Entry],
-    visible: &'a [usize],
-    sel: usize,
-    scope: Scope,
-    diff: &'a Text<'static>,
-    diff_scroll: u16,
-    prepared: &'a RenderedDiff,
-    diff_hscroll: u16,
-    msg: Option<&'a str>,
-}
-
-fn draw(frame: &mut ratatui::Frame, v: View, state: &mut ListState) {
+fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let areas = Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(frame.area());
 
     // ── top: file list ──
-    let items: Vec<ListItem> = v.visible.iter().map(|&i| status_item(&v.entries[i])).collect();
-    let top_title = if v.visible.is_empty() {
-        format!(" {}  clean   {X_MOVE} scope · q quit ", v.scope.label())
+    let items: Vec<ListItem> = app
+        .visible
+        .iter()
+        .map(|&i| status_item(&app.entries[i]))
+        .collect();
+    let top_title = if app.visible.is_empty() {
+        format!(" {}  clean   {X_MOVE} scope · q quit ", app.scope().label())
     } else {
         format!(
             " {}  {}/{}   {Y_MOVE} · {X_MOVE} scope · s/u/space stage · q quit ",
-            v.scope.label(),
-            v.sel + 1,
-            v.visible.len()
+            app.scope().label(),
+            app.sel + 1,
+            app.visible.len()
         )
     };
     let list = List::new(items)
         .block(pane_block(top_title, true))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("› ");
-    frame.render_stateful_widget(list, areas[0], state);
-    list_scrollbar(frame, areas[0], v.visible.len(), state.offset());
+    frame.render_stateful_widget(list, areas[0], &mut app.state);
+    list_scrollbar(frame, areas[0], app.visible.len(), app.state.offset());
 
     // ── bottom: diff of the selected file ──
-    let (path, tag) = match v.visible.get(v.sel).map(|&i| &v.entries[i]) {
-        Some(e) => (e.path.as_str(), diff_tag(e, v.scope)),
+    let (path, tag) = match app.current() {
+        Some(e) => (e.path.as_str(), diff_tag(e, app.scope())),
         None => ("", ""),
     };
-    let title = match v.msg {
+    let title = match &app.msg {
         Some(m) => format!(" {path}  ⚠ {m} "),
         None if path.is_empty() => " (nothing to show) ".to_string(),
         None => format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan "),
     };
-    let diff = Paragraph::new(v.diff.clone())
+    let diff = Paragraph::new(app.diff.clone())
         .block(pane_block(title, true))
-        .scroll((v.diff_scroll, 0));
+        .scroll((app.diff_scroll, 0));
     frame.render_widget(diff, areas[1]);
-    diff_scrollbar(frame, areas[1], v.diff.lines.len(), v.diff_scroll);
-    let cell = v.prepared.cell_width(areas[1].width.saturating_sub(2));
-    diff_hscrollbar(frame, areas[1], v.prepared.max_line(), cell, v.diff_hscroll);
+    diff_scrollbar(frame, areas[1], app.diff.lines.len(), app.diff_scroll);
+    let cell = app.prepared.cell_width(areas[1].width.saturating_sub(2));
+    diff_hscrollbar(frame, areas[1], app.prepared.max_line(), cell, app.diff_hscroll);
 }
 
 /// Which side of the diff the bottom pane is showing.

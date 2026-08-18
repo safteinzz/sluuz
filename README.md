@@ -95,6 +95,25 @@ slu repos --dirty        # only the ones needing attention
 Which of your repos have uncommitted or unpushed work, answered in one command
 instead of cd-ing through each.
 
+## Or walk into them
+
+`slu irepos` is that dashboard with a way in. Repos on top with their state, the
+selected repo's branches below, and `Enter` goes down one level at a time: repos,
+branches, commits, files, diff. `Esc` walks back up.
+
+```bash
+slu irepos               # every repo under here
+slu irepos ~/projects    # or under somewhere else
+slu irepos --dirty       # start on the ones with uncommitted work
+```
+
+![Interactive repo explorer listing repositories with their branch and state, one selected, and that repository's branches with their push state in the pane below](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/irepos.png)
+
+`h`/`l` slides between **dirty**, **all**, and **unpushed**. It is one app with
+three doors: `slu ibranch` opens it at the branches level of the repo you are
+standing in, `slu ilog` at the commits level, so the panes and the keys are the
+same wherever you came in.
+
 ## Read history in a real diff view
 
 `slu ilog` opens a full-screen browser: commits on top, the selected file's diff
@@ -143,8 +162,9 @@ slu ibranch -a           # local and remote
 
 ![Interactive branch list showing five branches with their push state: gone, ahead by one, no remote, and synced, with the current branch marked](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/ibranch.png)
 
-Drill into a branch for its commits, then a commit's files, then a diff. `h`/`l`
-slides between **local**, **all**, and **remote**. In `ilog` the same `↑` marks
+Drill into a branch for its commits, then a commit's files, then a diff, or start
+one level higher with `slu irepos`. `h`/`l` slides between **local**, **all**, and
+**remote**. In `ilog` the same `↑` marks
 commits that exist on no remote at all.
 
 ## Delete finished branches, carefully
@@ -164,8 +184,8 @@ never listed.
 
 ## One rule for the interactive views
 
-`ilog`, `ibranch`, `istatus`, `itidy` and `iscan` share it, so the keys never
-surprise you:
+`irepos`, `ilog`, `ibranch`, `istatus`, `itidy` and `iscan` share it, so the keys
+never surprise you:
 
 - **Plain keys drive the top pane.** `j`/`k` (or `↑`/`↓`) move, `h`/`l` (or
   `←`/`→`) change scope.

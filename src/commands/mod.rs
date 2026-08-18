@@ -2,6 +2,7 @@ pub mod completions;
 pub mod each;
 pub mod ibranch;
 pub mod ilog;
+pub mod irepos;
 pub mod iscan;
 pub mod istatus;
 pub mod itidy;

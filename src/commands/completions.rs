@@ -26,8 +26,12 @@ const VERBS: &[(&str, &str)] = &[
     ("tidy", "find merged, safe-to-delete branches"),
     ("each", "run a git command in every repo"),
     ("trace", "a prettier history view"),
-    ("ilog", "interactive log explorer (TUI)"),
+    ("irepos", "interactive repo explorer (TUI)"),
     ("ibranch", "interactive branch explorer (TUI)"),
+    ("ilog", "interactive log explorer (TUI)"),
+    ("iscan", "interactive history search (TUI)"),
+    ("istatus", "interactive status, stage and review (TUI)"),
+    ("itidy", "interactively delete finished branches (TUI)"),
     ("update", "update slu itself"),
     ("completions", "print a shell completion script"),
 ];

@@ -17,12 +17,17 @@
 use crate::git::{display_name, find_repos};
 use crate::history::{self, CommitMatch};
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, diff_hscrollbar, diff_scrollbar, difftool_commit, half_page,
-    is_back, is_down, is_left, is_open, is_right, is_up, list_scrollbar, load_diff_raw_in, norm_esc,
-    pane_block, pane_height, pane_width, pop_keyboard_enhancement, prepare_diff,
-    push_keyboard_enhancement, render_prepared, RenderedDiff, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE,
-    Y_MOVE,
+    clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
+    push_keyboard_enhancement,
 };
+use crate::tui::difftool::difftool_commit;
+use crate::tui::highlight::{prepare_diff, render_prepared, RenderedDiff};
+use crate::tui::input::{
+    is_back, is_down, is_left, is_open, is_right, is_up, norm_esc, CTRL_X_MOVE, CTRL_Y_MOVE,
+    X_MOVE, Y_MOVE,
+};
+use crate::tui::load::load_diff_raw;
+use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
@@ -31,6 +36,12 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::DefaultTerminal;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
+
+/// Rows a Ctrl-j/k moves the diff, columns a Ctrl-h/l pans it, and the
+/// PgUp/PgDn jump.
+const SCROLL_STEP: u16 = 3;
+const PAN_STEP: u16 = 8;
+const PAGE_STEP: u16 = 10;
 
 /// Shown as the bar's placeholder, and used when the bar is submitted empty:
 /// the terms a secret audit usually wants.
@@ -82,16 +93,68 @@ enum Mode {
     Browsing,
 }
 
+/// Everything the view holds: the bar being typed, what the last scan found,
+/// and where the cursor sits in it.
+struct App {
+    base: PathBuf,
+    depth: usize,
+    enhanced: bool,
+    width: u16,
+    mode: Mode,
+    query: String,
+    cursor: usize,
+    terms: Vec<String>,
+    hits: Vec<Hit>,
+    /// Indices into `hits` that the current term scope keeps.
+    visible: Vec<usize>,
+    sel: usize,
+    scope_idx: usize,
+    /// Has a scan run yet?
+    searched: bool,
+    /// A scan is queued for right after this frame.
+    pending: bool,
+    state: ListState,
+    prepared: RenderedDiff,
+    diff: Text<'static>,
+    diff_scroll: u16,
+    diff_hscroll: u16,
+    msg: Option<String>,
+}
+
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu iscan needs an interactive terminal — use `slu scan` for plain output");
         return;
     }
 
+    let mut app = App {
+        base: args.path,
+        depth: args.depth,
+        enhanced: false,
+        width: 120,
+        mode: Mode::Editing,
+        query: String::new(),
+        cursor: 0,
+        terms: Vec::new(),
+        hits: Vec::new(),
+        visible: Vec::new(),
+        sel: 0,
+        scope_idx: 0,
+        searched: false,
+        pending: false,
+        state: ListState::default(),
+        prepared: RenderedDiff::default(),
+        diff: Text::default(),
+        diff_scroll: 0,
+        diff_hscroll: 0,
+        msg: None,
+    };
+
     let mut terminal = ratatui::init();
-    let enhanced = push_keyboard_enhancement();
-    let result = event_loop(&mut terminal, &args.path, args.depth, enhanced);
-    if enhanced {
+    app.enhanced = push_keyboard_enhancement();
+    app.width = pane_width(&terminal);
+    let result = app.event_loop(&mut terminal);
+    if app.enhanced {
         pop_keyboard_enhancement();
     }
     ratatui::restore();
@@ -101,194 +164,195 @@ pub fn run(args: Args) {
     }
 }
 
-fn event_loop(
-    terminal: &mut DefaultTerminal,
-    base: &Path,
-    depth: usize,
-    enhanced: bool,
-) -> io::Result<()> {
-    let mut width = pane_width(terminal);
-    let mut mode = Mode::Editing;
-    let mut query = String::new();
-    let mut cursor = 0usize;
+impl App {
+    fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        loop {
+            terminal.draw(|frame| draw(frame, self))?;
 
-    let mut terms: Vec<String> = Vec::new();
-    let mut hits: Vec<Hit> = Vec::new();
-    let mut visible: Vec<usize> = Vec::new();
-    let mut sel = 0usize;
-    let mut scope_idx = 0usize;
-    let mut searched = false; // has a scan run yet?
-    let mut pending = false; // a scan is queued for right after this frame
+            // The scan blocks, so it only runs once the frame above has told
+            // the user it is working.
+            if self.pending {
+                self.scan();
+                continue;
+            }
 
-    let mut prepared = RenderedDiff::default();
-    let mut diff = Text::default();
-    let mut diff_scroll = 0u16;
-    let mut diff_hscroll = 0u16;
-    let mut msg: Option<String> = None;
+            let Event::Key(key) = event::read()? else {
+                let w = pane_width(terminal);
+                if w != self.width {
+                    self.width = w;
+                    self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
+                }
+                continue;
+            };
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let code = norm_esc(key.code, ctrl);
+            self.msg = None;
 
-    let mut state = ListState::default();
+            if ctrl && code == KeyCode::Char('c') {
+                break;
+            }
 
-    loop {
-        terminal.draw(|frame| {
-            draw(
-                frame,
-                View {
-                    query: &query,
-                    cursor,
-                    mode: &mode,
-                    scanning: pending,
-                    searched,
-                    terms: &terms,
-                    scope_idx,
-                    hits: &hits,
-                    visible: &visible,
-                    sel,
-                    diff: &diff,
-                    diff_scroll,
-                    prepared: &prepared,
-                    diff_hscroll,
-                    msg: msg.as_deref(),
-                },
-                &mut state,
-            )
-        })?;
-
-        // The scan blocks, so it only runs once the frame above has told the
-        // user it is working.
-        if pending {
-            // An empty bar means "the usual secret terms", matching the placeholder.
-            terms = parse_terms(if query.trim().is_empty() {
-                DEFAULT_TERMS
+            let quit = if self.mode == Mode::Editing {
+                self.edit_key(code, ctrl)
             } else {
-                &query
-            });
-            hits = collect(base, depth, &terms);
-            scope_idx = 0;
-            visible = visible_hits(&hits, scope_idx);
-            sel = 0;
-            state.select((!visible.is_empty()).then_some(0));
-            diff_scroll = 0;
-            diff_hscroll = 0;
-            refresh(&hits, &visible, sel, width, &mut prepared, &mut diff);
-            searched = true;
-            pending = false;
-            mode = Mode::Browsing;
-            continue;
-        }
-
-        let Event::Key(key) = event::read()? else {
-            let w = pane_width(terminal);
-            if w != width {
-                width = w;
-                diff = render_prepared(&prepared, width, diff_hscroll);
+                self.browse_key(code, ctrl, terminal)
+            };
+            if quit {
+                break;
             }
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let code = norm_esc(key.code, ctrl);
-        msg = None;
-
-        if ctrl && code == KeyCode::Char('c') {
-            break;
-        }
-
-        if mode == Mode::Editing {
-            match code {
-                KeyCode::Enter => pending = true,
-                KeyCode::Char(c) if !ctrl => {
-                    query.insert(char_to_byte(&query, cursor), c);
-                    cursor += 1;
-                }
-                KeyCode::Backspace if cursor > 0 => {
-                    query.remove(char_to_byte(&query, cursor - 1));
-                    cursor -= 1;
-                }
-                KeyCode::Delete if cursor < query.chars().count() => {
-                    query.remove(char_to_byte(&query, cursor));
-                }
-                KeyCode::Left if cursor > 0 => cursor -= 1,
-                KeyCode::Right if cursor < query.chars().count() => cursor += 1,
-                KeyCode::Home => cursor = 0,
-                KeyCode::End => cursor = query.chars().count(),
-                // Esc leaves the bar only when there are results to go back to.
-                KeyCode::Esc if searched => mode = Mode::Browsing,
-                KeyCode::Esc => break,
-                _ => {}
+            if self.mode == Mode::Browsing {
+                self.diff_scroll =
+                    clamp_scroll(self.diff_scroll, self.diff.lines.len(), pane_height(terminal));
             }
-            continue;
         }
+        Ok(())
+    }
 
-        // ── Browsing ────────────────────────────────────────────────────────
+    /// Pickaxe every repo under `base` for what the bar says, then show what it
+    /// found. An empty bar means the usual secret terms, matching the
+    /// placeholder.
+    fn scan(&mut self) {
+        self.terms = parse_terms(if self.query.trim().is_empty() {
+            DEFAULT_TERMS
+        } else {
+            &self.query
+        });
+        self.hits = collect(&self.base, self.depth, &self.terms);
+        self.scope_idx = 0;
+        self.sel = 0;
+        self.rescope();
+        self.searched = true;
+        self.pending = false;
+        self.mode = Mode::Browsing;
+    }
+
+    /// Re-filter for the current term scope, keep the cursor in range, and
+    /// refresh the diff under it.
+    fn rescope(&mut self) {
+        self.visible = self
+            .hits
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.in_scope(self.scope_idx))
+            .map(|(i, _)| i)
+            .collect();
+        if self.sel >= self.visible.len() {
+            self.sel = self.visible.len().saturating_sub(1);
+        }
+        self.state
+            .select((!self.visible.is_empty()).then_some(self.sel));
+        self.diff_scroll = 0;
+        self.diff_hscroll = 0;
+        self.refresh_diff();
+    }
+
+    /// Re-highlight the diff for the selected hit (the expensive syntect pass,
+    /// done once per selection change rather than per keypress).
+    fn refresh_diff(&mut self) {
+        match self.visible.get(self.sel).map(|&i| &self.hits[i]) {
+            Some(h) => {
+                let raw = load_diff_raw(&h.repo_path, &h.full, &h.file);
+                self.prepared = prepare_diff(&raw);
+                self.diff = render_prepared(&self.prepared, self.width, 0);
+            }
+            None => {
+                self.prepared = RenderedDiff::default();
+                self.diff = Text::default();
+            }
+        }
+    }
+
+    /// The query bar has focus: a plain text field until Enter runs it.
+    fn edit_key(&mut self, code: KeyCode, ctrl: bool) -> bool {
+        match code {
+            KeyCode::Enter => self.pending = true,
+            KeyCode::Char(c) if !ctrl => {
+                self.query.insert(char_to_byte(&self.query, self.cursor), c);
+                self.cursor += 1;
+            }
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.query.remove(char_to_byte(&self.query, self.cursor - 1));
+                self.cursor -= 1;
+            }
+            KeyCode::Delete if self.cursor < self.query.chars().count() => {
+                self.query.remove(char_to_byte(&self.query, self.cursor));
+            }
+            KeyCode::Left if self.cursor > 0 => self.cursor -= 1,
+            KeyCode::Right if self.cursor < self.query.chars().count() => self.cursor += 1,
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = self.query.chars().count(),
+            // Esc leaves the bar only when there are results to go back to.
+            KeyCode::Esc if self.searched => self.mode = Mode::Browsing,
+            KeyCode::Esc => return true,
+            _ => {}
+        }
+        false
+    }
+
+    /// Moving through what the scan found, with the hit's diff below it.
+    fn browse_key(&mut self, code: KeyCode, ctrl: bool, terminal: &mut DefaultTerminal) -> bool {
         let half = half_page(terminal);
         let mut moved = false;
 
         if matches!(code, KeyCode::Char('q')) || is_back(code) {
-            break;
+            return true;
         } else if matches!(code, KeyCode::Char('/') | KeyCode::Char('i')) {
-            mode = Mode::Editing;
+            self.mode = Mode::Editing;
         } else if ctrl && is_down(code) {
-            diff_scroll = diff_scroll.saturating_add(3);
+            self.diff_scroll = self.diff_scroll.saturating_add(SCROLL_STEP);
         } else if ctrl && is_up(code) {
-            diff_scroll = diff_scroll.saturating_sub(3);
+            self.diff_scroll = self.diff_scroll.saturating_sub(SCROLL_STEP);
         } else if ctrl && code == KeyCode::Char('d') {
-            diff_scroll = diff_scroll.saturating_add(half);
+            self.diff_scroll = self.diff_scroll.saturating_add(half);
         } else if ctrl && code == KeyCode::Char('u') {
-            diff_scroll = diff_scroll.saturating_sub(half);
+            self.diff_scroll = self.diff_scroll.saturating_sub(half);
         } else if ctrl && is_right(code) {
-            diff_hscroll = clamp_hscroll(
-                diff_hscroll.saturating_add(8),
-                prepared.max_line(),
-                prepared.cell_width(width),
+            self.diff_hscroll = clamp_hscroll(
+                self.diff_hscroll.saturating_add(PAN_STEP),
+                self.prepared.max_line(),
+                self.prepared.cell_width(self.width),
             );
-            diff = render_prepared(&prepared, width, diff_hscroll);
+            self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
         } else if ctrl && is_left(code) {
-            diff_hscroll = diff_hscroll.saturating_sub(8);
-            diff = render_prepared(&prepared, width, diff_hscroll);
+            self.diff_hscroll = self.diff_hscroll.saturating_sub(PAN_STEP);
+            self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
         } else if code == KeyCode::PageDown {
-            diff_scroll = diff_scroll.saturating_add(10);
+            self.diff_scroll = self.diff_scroll.saturating_add(PAGE_STEP);
         } else if code == KeyCode::PageUp {
-            diff_scroll = diff_scroll.saturating_sub(10);
-        } else if is_down(code) && sel + 1 < visible.len() {
-            sel += 1;
+            self.diff_scroll = self.diff_scroll.saturating_sub(PAGE_STEP);
+        } else if is_down(code) && self.sel + 1 < self.visible.len() {
+            self.sel += 1;
             moved = true;
-        } else if is_up(code) && sel > 0 {
-            sel -= 1;
+        } else if is_up(code) && self.sel > 0 {
+            self.sel -= 1;
             moved = true;
-        } else if !ctrl && is_left(code) && scope_idx > 0 {
-            scope_idx -= 1;
-            visible = visible_hits(&hits, scope_idx);
-            sel = 0;
+        } else if !ctrl && is_left(code) && self.scope_idx > 0 {
+            self.scope_idx -= 1;
+            self.sel = 0;
             moved = true;
-        } else if !ctrl && is_right(code) && scope_idx + 1 < terms.len() + 1 {
-            scope_idx += 1;
-            visible = visible_hits(&hits, scope_idx);
-            sel = 0;
+        } else if !ctrl && is_right(code) && self.scope_idx + 1 < self.terms.len() + 1 {
+            self.scope_idx += 1;
+            self.sel = 0;
             moved = true;
         } else if is_open(code)
-            && let Some(h) = visible.get(sel).map(|&i| &hits[i])
+            && let Some(h) = self.visible.get(self.sel).map(|&i| &self.hits[i])
         {
-            let m = difftool_commit(terminal, enhanced, &h.repo_path, &h.full, &h.file);
-            width = pane_width(terminal);
+            let (repo, full, file) = (h.repo_path.clone(), h.full.clone(), h.file.clone());
+            let m = difftool_commit(terminal, self.enhanced, &repo, &full, &file);
+            self.width = pane_width(terminal);
             if !m.is_empty() {
-                msg = Some(m);
+                self.msg = Some(m);
             }
         }
 
         if moved {
-            if sel >= visible.len() {
-                sel = visible.len().saturating_sub(1);
-            }
-            state.select((!visible.is_empty()).then_some(sel));
-            diff_scroll = 0;
-            diff_hscroll = 0;
-            refresh(&hits, &visible, sel, width, &mut prepared, &mut diff);
+            self.rescope();
         }
-        diff_scroll = clamp_scroll(diff_scroll, diff.lines.len(), pane_height(terminal));
+        false
     }
-    Ok(())
 }
 
 /// Byte offset of character index `idx`, so inserts and deletes stay safe on
@@ -360,56 +424,7 @@ fn terms_in(line: &str, terms: &[String]) -> Vec<usize> {
         .collect()
 }
 
-fn visible_hits(hits: &[Hit], scope_idx: usize) -> Vec<usize> {
-    hits.iter()
-        .enumerate()
-        .filter(|(_, h)| h.in_scope(scope_idx))
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// Re-highlight the diff for the selected hit (the expensive syntect pass, done
-/// once per selection change rather than per keypress).
-fn refresh(
-    hits: &[Hit],
-    visible: &[usize],
-    sel: usize,
-    width: u16,
-    prepared: &mut RenderedDiff,
-    diff: &mut Text<'static>,
-) {
-    match visible.get(sel).map(|&i| &hits[i]) {
-        Some(h) => {
-            let raw = load_diff_raw_in(&h.repo_path, &h.full, &h.file);
-            *prepared = prepare_diff(&raw);
-            *diff = render_prepared(prepared, width, 0);
-        }
-        None => {
-            *prepared = RenderedDiff::default();
-            *diff = Text::default();
-        }
-    }
-}
-
-struct View<'a> {
-    query: &'a str,
-    cursor: usize,
-    mode: &'a Mode,
-    scanning: bool,
-    searched: bool,
-    terms: &'a [String],
-    scope_idx: usize,
-    hits: &'a [Hit],
-    visible: &'a [usize],
-    sel: usize,
-    diff: &'a Text<'static>,
-    diff_scroll: u16,
-    prepared: &'a RenderedDiff,
-    diff_hscroll: u16,
-    msg: Option<&'a str>,
-}
-
-fn draw(frame: &mut ratatui::Frame, v: View, state: &mut ListState) {
+fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let areas = Layout::vertical([
         Constraint::Length(3),
         Constraint::Percentage(42),
@@ -418,9 +433,9 @@ fn draw(frame: &mut ratatui::Frame, v: View, state: &mut ListState) {
     .split(frame.area());
 
     // ── query bar ──
-    let editing = *v.mode == Mode::Editing;
+    let editing = app.mode == Mode::Editing;
     let label = "scan terms (comma separated)";
-    let bar_hint = if v.scanning {
+    let bar_hint = if app.pending {
         format!(" {label} · working… ")
     } else if editing {
         format!(" {label} · enter run · esc back ")
@@ -428,7 +443,7 @@ fn draw(frame: &mut ratatui::Frame, v: View, state: &mut ListState) {
         format!(" {label} · / edit ")
     };
     // Empty bar shows the defaults dimmed; submitting empty runs exactly those.
-    let bar_line = if v.query.is_empty() {
+    let bar_line = if app.query.is_empty() {
         Line::from(Span::styled(
             format!(" {DEFAULT_TERMS}"),
             Style::default()
@@ -437,67 +452,67 @@ fn draw(frame: &mut ratatui::Frame, v: View, state: &mut ListState) {
         ))
     } else {
         Line::from(Span::styled(
-            format!(" {}", v.query),
+            format!(" {}", app.query),
             Style::default().fg(Color::White),
         ))
     };
     let bar = Paragraph::new(bar_line).block(pane_block(bar_hint, editing));
     frame.render_widget(bar, areas[0]);
-    if editing && !v.scanning {
+    if editing && !app.pending {
         // A real terminal cursor, so it blinks where the user is typing.
         frame.set_cursor_position(Position::new(
-            areas[0].x + 2 + v.cursor as u16,
+            areas[0].x + 2 + app.cursor as u16,
             areas[0].y + 1,
         ));
     }
 
     // ── hits ──
-    let items: Vec<ListItem> = v.visible.iter().map(|&i| hit_item(&v.hits[i])).collect();
-    let scope = if v.scope_idx == 0 || v.terms.is_empty() {
+    let items: Vec<ListItem> = app.visible.iter().map(|&i| hit_item(&app.hits[i])).collect();
+    let scope = if app.scope_idx == 0 || app.terms.is_empty() {
         "all terms".to_string()
     } else {
-        v.terms[v.scope_idx - 1].clone()
+        app.terms[app.scope_idx - 1].clone()
     };
-    let title = if v.scanning {
+    let title = if app.pending {
         " searching every branch of every repo… ".to_string()
-    } else if !v.searched {
+    } else if !app.searched {
         " type terms above, or press enter for the defaults ".to_string()
-    } else if v.visible.is_empty() {
+    } else if app.visible.is_empty() {
         format!(" no hits · {scope} ·  / edit · q quit ")
     } else {
         format!(
             " hits · {scope}  {}/{} of {}   {Y_MOVE} · {X_MOVE} term · / edit · q quit ",
-            v.sel + 1,
-            v.visible.len(),
-            v.hits.len()
+            app.sel + 1,
+            app.visible.len(),
+            app.hits.len()
         )
     };
     let list = List::new(items)
         .block(pane_block(title, !editing))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("› ");
-    frame.render_stateful_widget(list, areas[1], state);
-    list_scrollbar(frame, areas[1], v.visible.len(), state.offset());
+    frame.render_stateful_widget(list, areas[1], &mut app.state);
+    list_scrollbar(frame, areas[1], app.visible.len(), app.state.offset());
 
     // ── diff ──
-    let subtitle = match v.visible.get(v.sel).map(|&i| &v.hits[i]) {
+    let subtitle = match app.visible.get(app.sel).map(|&i| &app.hits[i]) {
         Some(h) => format!("{}  {}  {}", h.short, h.subject, h.file),
         None => String::new(),
     };
-    let dtitle = match v.msg {
+    let dtitle = match &app.msg {
         Some(m) => format!(" ⚠ {m} "),
         None if subtitle.is_empty() => " (nothing to show) ".to_string(),
         None => {
             format!(" {subtitle}   enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan ")
         }
     };
-    let diff = Paragraph::new(v.diff.clone())
+    let diff = Paragraph::new(app.diff.clone())
         .block(pane_block(dtitle, !editing))
-        .scroll((v.diff_scroll, 0));
+        .scroll((app.diff_scroll, 0));
     frame.render_widget(diff, areas[2]);
-    diff_scrollbar(frame, areas[2], v.diff.lines.len(), v.diff_scroll);
-    let cell = v.prepared.cell_width(areas[2].width.saturating_sub(2));
-    diff_hscrollbar(frame, areas[2], v.prepared.max_line(), cell, v.diff_hscroll);
+    diff_scrollbar(frame, areas[2], app.diff.lines.len(), app.diff_scroll);
+    let cell = app.prepared.cell_width(areas[2].width.saturating_sub(2));
+    diff_hscrollbar(frame, areas[2], app.prepared.max_line(), cell, app.diff_hscroll);
 }
 
 fn hit_item(h: &Hit) -> ListItem<'static> {

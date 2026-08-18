@@ -15,6 +15,7 @@
 //!   slu itidy              Interactively delete branches with a gone upstream
 //!   slu completions <sh>   Print a tab-completion script (reuses git's)
 
+mod app;
 mod commands;
 mod git;
 mod history;
@@ -113,6 +114,12 @@ enum Cmd {
     ///   [path…]   only commits touching these paths
     #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
+    /// Interactive repo explorer (TUI) [path]
+    ///   repos → branches → commits → diff, enter drills in
+    ///   --dirty   start on repos with uncommitted work
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
+    Irepos(commands::irepos::Args),
     /// Interactive branch explorer (TUI)
     ///   -r        remotes only
     ///   -a        local + remote
@@ -154,6 +161,7 @@ fn main() {
         Cmd::Each(args) => commands::each::run(args),
         Cmd::Trace(args) => commands::trace::run(args),
         Cmd::Ilog(args) => commands::ilog::run(args),
+        Cmd::Irepos(args) => commands::irepos::run(args),
         Cmd::Ibranch(args) => commands::ibranch::run(args),
         Cmd::Iscan(args) => commands::iscan::run(args),
         Cmd::Istatus(args) => commands::istatus::run(args),
