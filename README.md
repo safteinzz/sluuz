@@ -13,7 +13,7 @@ cargo install sluuz
 ```
 
 That lands a single command: **`slu`**, three letters like `git` itself. Update
-later with `slu update`.
+later with `slu self update`, or ask first with `slu self check`.
 
 ## It is still git
 
@@ -218,7 +218,8 @@ slu trace [-a] [-g] [-n N]     # a prettier, aligned history view
 slu sync [path] [--pull]       # fetch and prune every repo, optionally fast-forward
 slu tidy [path] [-a]           # itidy's list across every repo, with a delete command to paste
 slu each <git args>            # run any git command in every repo, in parallel
-slu update [-y]                # update sluuz itself
+slu self update [-y]           # reinstall sluuz from crates.io
+slu self check                 # is there a newer release?
 ```
 
 `tidy` and `itidy` judge by "upstream gone", not by "merged", so a branch still

@@ -134,10 +134,9 @@ enum Cmd {
     ///   this repo · ←→/hl scope · s/u/space stage
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),
-    /// Update sluuz to the latest release
-    ///   -y        skip the confirmation prompt
-    #[command(verbatim_doc_comment)]
-    Update(commands::update::Args),
+    /// Manage sluuz itself: `self update` reinstalls, `self check` looks for a newer release
+    #[command(name = "self", subcommand)]
+    Selfie(commands::selfcmd::Cmd),
     /// Print a tab-completion script <bash|zsh|fish>
     ///   --add     append the loader to your shell's rc file for you
     ///   reuses git's own completion (branches, refs, flags)
@@ -165,7 +164,7 @@ fn main() {
         Cmd::Ibranch(args) => commands::ibranch::run(args),
         Cmd::Iscan(args) => commands::iscan::run(args),
         Cmd::Istatus(args) => commands::istatus::run(args),
-        Cmd::Update(args) => commands::update::run(args),
+        Cmd::Selfie(cmd) => commands::selfcmd::run(cmd),
         Cmd::Completions(args) => commands::completions::run(args),
         Cmd::Git(args) => passthrough(&args),
     }

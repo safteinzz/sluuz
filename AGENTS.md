@@ -37,7 +37,7 @@ Working brief for an AI coding agent, not documentation for people (the README c
 - **When behavior doesn't match the code you just wrote:** the debug binary is stale. `cargo clean -p sluuz`, then rebuild.
 - `syntect` is pinned to `default-features=false` + `default-fancy` - the pure-Rust regex backend, so there's no C/oniguruma and it builds on Windows. Don't "fix" the feature flags.
 - `slu completions` delegates to git's own completion (that's the only way branch names complete). git's completion is **lazy-loaded**, and completing `slu` never trips that loader - so the emitted script force-loads it.
-- `slu update` on Windows renames the running `slu.exe` aside first: Windows cannot overwrite a running binary.
+- `slu self update` on Windows renames the running `slu.exe` aside first: Windows cannot overwrite a running binary.
 - VS Code's integrated terminal cannot distinguish `Ctrl-J` from `Enter` on any OS (not just Windows). The fix is a user `keybindings.json` remap to `Ctrl-Down` - see README Troubleshooting; there is no code-side fix.
 
 ## Build / lint / test

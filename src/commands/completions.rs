@@ -32,7 +32,7 @@ const VERBS: &[(&str, &str)] = &[
     ("iscan", "interactive history search (TUI)"),
     ("istatus", "interactive status, stage and review (TUI)"),
     ("itidy", "interactively delete finished branches (TUI)"),
-    ("update", "update slu itself"),
+    ("self", "update or check slu itself"),
     ("completions", "print a shell completion script"),
 ];
 

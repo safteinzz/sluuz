@@ -12,4 +12,4 @@ pub mod search;
 pub mod sync;
 pub mod tidy;
 pub mod trace;
-pub mod update;
+pub mod selfcmd;
