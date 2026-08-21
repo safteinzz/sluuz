@@ -1,4 +1,4 @@
-//! `gt search` — find commits where a string was added or removed (git pickaxe).
+//! `gt search` - find commits where a string was added or removed (git pickaxe).
 //!
 //! Equivalent to: git log -S <pattern> -p, but with colorized output, the
 //! matching file(s), the branches that contain each commit, and optional
@@ -34,7 +34,7 @@ pub fn run(args: Args) {
         vec![PathBuf::from(".")]
     };
 
-    // A single, case-sensitive term — matches the original fixed-string behavior.
+    // A single, case-sensitive term - matches the original fixed-string behavior.
     let terms = vec![args.pattern.clone()];
 
     // `par_iter` is rayon's parallel version of `iter`; it spreads the per-repo
@@ -110,7 +110,7 @@ fn format_repo(name: &str, repo: &str, commits: &[CommitMatch], limit: usize) ->
     if total > limit {
         out.push_str(&format!(
             "\n  {}\n",
-            format!("↳ {} more — use -l {} to see all", total - limit, total).dimmed()
+            format!("↳ {} more - use -l {} to see all", total - limit, total).dimmed()
         ));
     }
 

@@ -89,7 +89,7 @@ pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u
         return;
     }
     let mut state = ScrollbarState::new(max_line - cell).position(hscroll as usize);
-    // `■` renders vertically centered and medium-weight — between the too-thin,
+    // `■` renders vertically centered and medium-weight - between the too-thin,
     // low-sitting `▬` and the full-cell block `█`.
     let bar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
         .begin_symbol(None)

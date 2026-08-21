@@ -96,7 +96,7 @@ impl App {
                     let author = f.next().unwrap_or("").to_string();
                     let upstream = f.next().unwrap_or("");
                     let track = f.next().unwrap_or("").to_string();
-                    // Skip the symbolic `refs/remotes/*/HEAD` alias — it's noise.
+                    // Skip the symbolic `refs/remotes/*/HEAD` alias - it's noise.
                     if refname.ends_with("/HEAD") {
                         return None;
                     }

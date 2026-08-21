@@ -1,4 +1,4 @@
-//! `slu trace` — a better history view (a prettier `log`).
+//! `slu trace` - a better history view (a prettier `log`).
 //!
 //! Deliberately NOT named `log`: sluuz never shadows a real git command, so
 //! `slu log` still passes straight through to git. `trace` is the enhanced view:
@@ -35,7 +35,7 @@ pub fn run(args: Args) {
     }
 }
 
-/// ASCII record separator — marks where git's graph prefix ends and our fields
+/// ASCII record separator - marks where git's graph prefix ends and our fields
 /// begin, so we can keep git's graph rail and still render our own columns.
 const REC: char = '\u{1e}';
 
@@ -74,7 +74,7 @@ fn pretty_log(all: bool, limit: usize) {
     }
 }
 
-/// The graph view — we keep git's own commit graph (the `│ ├─╮` rails) but
+/// The graph view - we keep git's own commit graph (the `│ ├─╮` rails) but
 /// re-render each commit line through our renderer so the columns match the
 /// flat view exactly. Graph-only lines (`|\`, `|/`) are passed through as-is.
 fn graph_log(all: bool, limit: usize) {
@@ -140,7 +140,7 @@ fn rel_width<'a>(rows: impl Iterator<Item = &'a Row>) -> usize {
 
 /// Render one commit: `<rail>hash  date  (relative)  <committer> subject`.
 /// The relative token is right-aligned as a whole, so padding lands *before*
-/// the `(` — "(2 days ago)" / "   (10 days ago)". Subject is truncated to fit.
+/// the `(` - "(2 days ago)" / "   (10 days ago)". Subject is truncated to fit.
 fn print_row(rail: &str, r: &Row, rel_w: usize, width: usize) {
     let who = truncate(&r.committer, NAME_MAX);
 

@@ -14,9 +14,9 @@ use std::process::Command;
 
 /// One commit that matched, with the files that changed and their diff lines.
 pub struct CommitMatch {
-    /// Abbreviated hash (%h) — for display.
+    /// Abbreviated hash (%h) - for display.
     pub short: String,
-    /// Full hash (%H) — stable key for merging and `branch --contains`.
+    /// Full hash (%H) - stable key for merging and `branch --contains`.
     pub full: String,
     /// Author date, `YYYY-MM-DD` (%ad with --date=short).
     pub date: String,
@@ -28,7 +28,7 @@ pub struct CommitMatch {
 /// One file within a matching commit.
 pub struct FileMatch {
     pub path: String,
-    /// (is_addition, line). Empty for binary/encrypted files — git shows no
+    /// (is_addition, line). Empty for binary/encrypted files - git shows no
     /// +/- lines for those, but pickaxe still flags the file as changed.
     pub lines: Vec<(bool, String)>,
 }

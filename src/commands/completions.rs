@@ -1,4 +1,4 @@
-//! `slu completions <shell>` — print a tab-completion script for your shell.
+//! `slu completions <shell>` - print a tab-completion script for your shell.
 //!
 //! slu is a git superset, so the smart move is to *reuse git's own completion*
 //! rather than reinvent it: git's completion already knows your branches, tags,
@@ -115,7 +115,7 @@ fn install(shell: Shell) {
         return;
     }
 
-    // fish's config lives under ~/.config/fish — make sure the dir exists.
+    // fish's config lives under ~/.config/fish - make sure the dir exists.
     if let Some(parent) = rc.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -137,7 +137,7 @@ fn install(shell: Shell) {
             );
         }
         Err(e) => {
-            eprintln!("{} {} — {e}", "slu: could not write".red(), rc.display());
+            eprintln!("{} {} - {e}", "slu: could not write".red(), rc.display());
             std::process::exit(1);
         }
     }
@@ -172,12 +172,12 @@ fn verb_names() -> String {
 /// (the `bash-completion` package, or sourcing `git-completion.bash`).
 fn bash() -> String {
     format!(
-        r#"# slu bash completion — `slu` is a git superset, so this reuses git's own
+        r#"# slu bash completion - `slu` is a git superset, so this reuses git's own
 # completion (branches, tags, remotes, every git subcommand and flag) and adds
 # slu's verbs on top.
 #   add to ~/.bashrc:  source <(slu completions bash)
 
-# git's bash completion is normally lazy-loaded — it only kicks in the first time
+# git's bash completion is normally lazy-loaded - it only kicks in the first time
 # you complete `git` itself. We complete `slu`, which never triggers that, so
 # `__git_main` would never exist and there'd be nothing to delegate to. Force it
 # to load up front: ask bash-completion's loader first, then fall back to known
@@ -231,7 +231,7 @@ fn zsh() -> String {
         .join("\n");
     format!(
         r#"#compdef slu
-# slu zsh completion — `slu` is a git superset, so this reuses zsh's bundled
+# slu zsh completion - `slu` is a git superset, so this reuses zsh's bundled
 # git completion (branches, tags, remotes, flags) and adds slu's verbs on top.
 #   add to ~/.zshrc:  source <(slu completions zsh)
 
@@ -265,7 +265,7 @@ fn fish() -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        r#"# slu fish completion — `slu` is a git superset, so it inherits all of git's
+        r#"# slu fish completion - `slu` is a git superset, so it inherits all of git's
 # completions (branches, tags, remotes, flags) and adds slu's verbs on top.
 #   add to ~/.config/fish/config.fish:  slu completions fish | source
 

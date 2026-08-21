@@ -1,4 +1,4 @@
-//! sluuz — a git superset. Binary: `slu`.
+//! sluuz - a git superset. Binary: `slu`.
 //!
 //! Every git command passes straight through (`slu commit`, `slu push`, `slu
 //! log`), and these extra verbs add cross-repo / history superpowers:
@@ -11,7 +11,7 @@
 //!   slu trace              A prettier history view (does not shadow `git log`)
 //!   slu ilog               Interactive log explorer (TUI)
 //!   slu ibranch            Interactive branch explorer (TUI)
-//!   slu istatus            Interactive git status — stage/unstage + diffs
+//!   slu istatus            Interactive git status - stage/unstage + diffs
 //!   slu itidy              Interactively delete branches with a gone upstream
 //!   slu completions <sh>   Print a tab-completion script (reuses git's)
 
@@ -25,7 +25,7 @@ use clap::{Parser, Subcommand};
 use std::process::Command;
 
 /// Shown at the bottom of `slu --help`: the one thing the command list can't
-/// convey — that everything else is just git.
+/// convey - that everything else is just git.
 const PASSTHROUGH: &str = concat!(
     "Anything else is real git, passed straight through: slu commit -m \"fix\", slu push, slu rebase …
 Run `slu <command> --help` for the full detail of any command.",
@@ -76,7 +76,7 @@ enum Cmd {
     ///   -l N      max commits shown per repo (20)
     #[command(verbatim_doc_comment)]
     Search(commands::search::Args),
-    /// Scan repos for sensitive terms — secrets, tokens [path]
+    /// Scan repos for sensitive terms - secrets, tokens [path]
     ///   -t terms  custom comma-separated terms
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
@@ -130,7 +130,7 @@ enum Cmd {
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Iscan(commands::iscan::Args),
-    /// Interactive git status — stage/unstage + diffs (TUI)
+    /// Interactive git status - stage/unstage + diffs (TUI)
     ///   this repo · ←→/hl scope · s/u/space stage
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),

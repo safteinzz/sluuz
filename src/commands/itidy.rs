@@ -1,14 +1,14 @@
-//! `slu itidy` — interactive branch tidier (TUI) for the current repo.
+//! `slu itidy` - interactive branch tidier (TUI) for the current repo.
 //!
 //! Lists local branches whose upstream is **gone** (the remote branch they
-//! tracked was deleted — e.g. a merged PR that the remote auto-deleted), which
+//! tracked was deleted - e.g. a merged PR that the remote auto-deleted), which
 //! are the genuinely-finished branches worth cleaning up. It deliberately does
 //! *not* list branches still alive on the remote (like a reserved `v0.2.21`) or
 //! ones that never had an upstream.
 //!
 //! `j`/`k` (or arrows) move; `Enter` opens a Yes/No confirm popup (default
-//! **No**), where `←`/`→` (or `h`/`l`) toggle and `Enter` acts on the highlight
-//! — Yes deletes (`git branch -D`, force, since these are done on the remote and
+//! **No**), where `←`/`→` (or `h`/`l`) toggle and `Enter` acts on the highlight:
+//! Yes deletes (`git branch -D`, force, since these are done on the remote and
 //! often aren't recognised as locally merged), No cancels. `y`/`n` are shortcuts;
 //! `Esc` cancels the popup, or quits when none is open. `q` / `Ctrl-C` quit.
 //!
@@ -51,7 +51,7 @@ struct App {
 
 pub fn run(_args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu itidy needs an interactive terminal — use `slu tidy` for the scriptable view");
+        eprintln!("slu itidy needs an interactive terminal - use `slu tidy` for the scriptable view");
         return;
     }
 
@@ -173,7 +173,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(frame.area());
 
     let title = if app.branches.is_empty() {
-        " no branches with a deleted upstream — nothing to tidy ".to_string()
+        " no branches with a deleted upstream - nothing to tidy ".to_string()
     } else {
         format!(" gone branches  {}/{} ", app.sel + 1, app.branches.len())
     };
@@ -275,7 +275,7 @@ fn gone_item(b: &Gone) -> ListItem<'static> {
 }
 
 /// Local branches whose upstream is gone, newest-activity first. `%(refname)` is
-/// stripped to the plain branch name ourselves — `%(refname:short)` would return
+/// stripped to the plain branch name ourselves - `%(refname:short)` would return
 /// `heads/v0.2.20` when a tag of the same name exists, which `git branch -D`
 /// can't take.
 fn load_gone() -> Vec<Gone> {

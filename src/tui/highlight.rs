@@ -27,7 +27,7 @@ fn max_line_width(raw: &str) -> usize {
 
 // ── side-by-side diff rendering ─────────────────────────────────────────────
 
-/// Two highlighters per file — one for the old side, one for the new — so a
+/// Two highlighters per file - one for the old side, one for the new - so a
 /// removed line's syntax state never corrupts the added side and vice versa.
 struct FileHl {
     old: HighlightLines<'static>,
@@ -39,7 +39,7 @@ type NumLine = (usize, Vec<Span<'static>>);
 
 /// One row of a parsed diff: either a full-width header line, or a side-by-side
 /// pair whose cells are already syntax-highlighted (so re-laying out for a
-/// scroll is cheap — no re-highlighting).
+/// scroll is cheap - no re-highlighting).
 enum DiffRow {
     Header(Line<'static>),
     Pair {
@@ -68,7 +68,7 @@ impl RenderedDiff {
 
     /// Visible content columns per side at total pane `width`. Mirrors the layout
     /// math in `render_prepared` (gutters + " │ " separator eat into each side),
-    /// so horizontal-scroll clamping matches what's actually drawn — otherwise the
+    /// so horizontal-scroll clamping matches what's actually drawn - otherwise the
     /// tail of a medium-length line stays hidden because panning stops short.
     pub fn cell_width(&self, width: u16) -> u16 {
         let avail = (width as usize).saturating_sub(2 * self.gutter_w + 5);
@@ -189,7 +189,7 @@ fn flush_pairs(rows: &mut Vec<DiffRow>, rem: &mut Vec<NumLine>, add: &mut Vec<Nu
 }
 
 /// Lay out a prepared diff at `width`, panned right by `hscroll` columns. Cheap:
-/// just slices the already-highlighted spans into columns — no highlighting.
+/// just slices the already-highlighted spans into columns - no highlighting.
 pub fn render_prepared(d: &RenderedDiff, width: u16, hscroll: u16) -> Text<'static> {
     let g = d.gutter_w;
     let inner = width as usize;

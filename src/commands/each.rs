@@ -1,4 +1,4 @@
-//! `slu each <git args>` — run any git command in every repo under the current
+//! `slu each <git args>` - run any git command in every repo under the current
 //! directory, in parallel.
 //!
 //! This generalizes the dedicated multi-repo commands: `slu each pull --ff-only`,

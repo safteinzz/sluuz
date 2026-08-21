@@ -1,4 +1,4 @@
-//! `slu ibranch` — interactive branch explorer (TUI). The branches level of the
+//! `slu ibranch` - interactive branch explorer (TUI). The branches level of the
 //! drill, entered directly: this repo's branches, their commits, and the diffs
 //! under those.
 //!
@@ -26,7 +26,7 @@ pub struct Args {
 
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu ibranch needs an interactive terminal — use `slu tidy` / `git branch` instead");
+        eprintln!("slu ibranch needs an interactive terminal - use `slu tidy` / `git branch` instead");
         return;
     }
 

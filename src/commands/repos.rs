@@ -1,7 +1,7 @@
-//! `slu repos` — at-a-glance working-tree state for every repo under a path.
+//! `slu repos` - at-a-glance working-tree state for every repo under a path.
 //!
 //! For each repo it shows the current branch, how many files are dirty, and how
-//! far ahead/behind its upstream it is — so "which of my repos have uncommitted
+//! far ahead/behind its upstream it is - so "which of my repos have uncommitted
 //! or unpushed work?" is one command instead of cd-ing through each.
 
 use crate::git::{find_repos, repo_status, RepoStatus};

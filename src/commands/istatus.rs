@@ -1,4 +1,4 @@
-//! `slu istatus` — interactive `git status` (TUI) for the current repo.
+//! `slu istatus` - interactive `git status` (TUI) for the current repo.
 //!
 //! Top pane: the changed files. Bottom pane: the selected file's diff
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
@@ -108,7 +108,7 @@ struct App {
 
 pub fn run(_args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu istatus needs an interactive terminal — use `git status` instead");
+        eprintln!("slu istatus needs an interactive terminal - use `git status` instead");
         return;
     }
     // Anchor every git call at the repo root. `git status` reports paths
@@ -237,7 +237,7 @@ impl App {
         let (path, untracked) = (e.path.clone(), e.untracked());
 
         if untracked {
-            self.msg = Some("untracked — nothing to compare".to_string());
+            self.msg = Some("untracked - nothing to compare".to_string());
             return false;
         }
         let args: &[&str] = if cached {
@@ -378,7 +378,7 @@ fn diff_for(root: &str, entry: &Entry, scope: Scope) -> String {
 fn load_status(root: &str) -> Vec<Entry> {
     // `git_capture_raw`, not `git_capture`: the porcelain's first column is a
     // SPACE when a file has no staged change, and trimming would eat it on the
-    // first record — shifting the status codes and the path by one char.
+    // first record - shifting the status codes and the path by one char.
     let raw = match git_capture_raw(root, &["status", "--porcelain", "-z"]) {
         Some(r) => r,
         None => return Vec::new(),

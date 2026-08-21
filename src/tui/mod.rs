@@ -49,7 +49,7 @@ pub fn pane_width(terminal: &DefaultTerminal) -> u16 {
         .unwrap_or(120)
 }
 
-/// Inner height of the lower (~60%) pane — the diff viewport, in rows.
+/// Inner height of the lower (~60%) pane - the diff viewport, in rows.
 pub fn pane_height(terminal: &DefaultTerminal) -> u16 {
     terminal
         .size()
@@ -62,7 +62,7 @@ pub fn half_page(terminal: &DefaultTerminal) -> u16 {
     (pane_height(terminal) / 2).max(1)
 }
 
-/// Clamp a scroll offset so the last line can't scroll above the viewport —
+/// Clamp a scroll offset so the last line can't scroll above the viewport -
 /// stops you from scrolling off the bottom into empty space.
 pub fn clamp_scroll(scroll: u16, total_lines: usize, viewport: u16) -> u16 {
     let max = (total_lines.min(u16::MAX as usize) as u16).saturating_sub(viewport);

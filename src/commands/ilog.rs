@@ -1,4 +1,4 @@
-//! `slu ilog` — interactive log explorer (TUI). The commits level of the drill,
+//! `slu ilog` - interactive log explorer (TUI). The commits level of the drill,
 //! entered directly: this repo's log, its files, and their diffs.
 //!
 //! Commits (top, j/k) show the selected commit's files below (Ctrl-j/k); Enter
@@ -28,12 +28,12 @@ pub struct Args {
 
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu ilog needs an interactive terminal — use `slu trace` for plain output");
+        eprintln!("slu ilog needs an interactive terminal - use `slu trace` for plain output");
         return;
     }
 
     // The user typed their paths relative to the cwd, but git runs against the
-    // repo root — so rewrite them to root-relative, or `slu ilog .env` from a
+    // repo root - so rewrite them to root-relative, or `slu ilog .env` from a
     // subdirectory would look for `<root>/.env`.
     let prefix = git_capture(".", &["rev-parse", "--show-prefix"]).unwrap_or_default();
     let paths: Vec<String> = args.paths.iter().map(|p| rebase_path(p, &prefix)).collect();
@@ -57,7 +57,7 @@ pub fn run(args: Args) {
 
 /// Rewrite a user-typed path so it is relative to the repo root. `prefix` is
 /// `git rev-parse --show-prefix` (the cwd's path below the root, e.g. `PROD/`,
-/// empty at the root). Absolute paths are left alone — git resolves those
+/// empty at the root). Absolute paths are left alone - git resolves those
 /// itself. `.` and `..` segments are folded lexically so `../x` from `PROD/`
 /// becomes `x`, not `PROD/../x`.
 fn rebase_path(path: &str, prefix: &str) -> String {

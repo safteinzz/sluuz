@@ -1,4 +1,4 @@
-//! `gt scan` — scan git repositories for sensitive terms in commit history.
+//! `gt scan` - scan git repositories for sensitive terms in commit history.
 //!
 //! Checks every commit across all branches for a list of sensitive terms, then
 //! reports which commit, branch, and file each hit came from. Matching uses

@@ -1,10 +1,10 @@
-//! `slu sync` — fetch (and optionally fast-forward) every repo under a path in
+//! `slu sync` - fetch (and optionally fast-forward) every repo under a path in
 //! parallel.
 //!
 //! By default it only fetches + prunes, which never touches your working tree.
 //! With `--pull` it additionally runs `git pull --ff-only`, which fast-forwards
 //! the current branch when it safely can and refuses (rather than merging) when
-//! it can't — so it can't create merge commits or conflicts.
+//! it can't - so it can't create merge commits or conflicts.
 
 use crate::git::{display_name, find_repos, git_run};
 use colored::Colorize;
@@ -122,7 +122,7 @@ fn process(name: String, repo: &str, pull: bool) -> Outcome {
         };
     }
 
-    // A missing upstream isn't a failure — there's just nothing to pull.
+    // A missing upstream isn't a failure - there's just nothing to pull.
     if pout.contains("no tracking information") {
         return Outcome {
             name,

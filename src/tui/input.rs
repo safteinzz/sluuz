@@ -8,7 +8,7 @@ use ratatui::crossterm::event::KeyCode;
 /// Key-hint labels shown in pane titles, defined once so every pane reads the
 /// same. `Y_MOVE`/`X_MOVE` are plain vertical/horizontal navigation (arrows and
 /// hjkl both work everywhere); the `CTRL_` variants are the modifier forms used
-/// for the bottom pane — Ctrl-arrows are the terminal-safe way to send them,
+/// for the bottom pane - Ctrl-arrows are the terminal-safe way to send them,
 /// since some terminals can't send a distinct Ctrl-letter.
 pub const Y_MOVE: &str = "↑↓/jk";
 pub const CTRL_Y_MOVE: &str = "ctrl-↑↓/jk";
@@ -44,7 +44,7 @@ pub fn is_right(c: KeyCode) -> bool {
 
 /// Fold Ctrl+[ back into Esc. Terminals send Ctrl+[ as the raw ESC byte, but the
 /// kitty protocol we push (DISAMBIGUATE_ESCAPE_CODES) turns it into a distinct
-/// Ctrl+[ event — so map it back, since Ctrl+[ is Esc in vim muscle memory. Call
+/// Ctrl+[ event - so map it back, since Ctrl+[ is Esc in vim muscle memory. Call
 /// it once per key event before matching.
 pub fn norm_esc(code: KeyCode, ctrl: bool) -> KeyCode {
     if ctrl && matches!(code, KeyCode::Char('[')) {

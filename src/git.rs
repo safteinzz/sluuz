@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
-/// ASCII unit separator — a field delimiter that won't appear in git's output,
+/// ASCII unit separator - a field delimiter that won't appear in git's output,
 /// so `--format` strings can split on it without quoting anything.
 pub const SEP: char = '\u{1f}';
 
@@ -125,7 +125,7 @@ pub fn short_remote(url: &str) -> String {
         return format!("{host}:{path}");
     }
 
-    // The scp-like form: [user@]host:path — but not a Windows drive (C:\…).
+    // The scp-like form: [user@]host:path - but not a Windows drive (C:\…).
     if let Some((hostpart, path)) = stripped.split_once(':')
         && !path.starts_with('\\')
         && !path.starts_with('/')
@@ -169,7 +169,7 @@ pub fn git_capture(repo: &str, args: &[&str]) -> Option<String> {
 }
 
 /// Like `git_capture`, but returns stdout **untrimmed**. Use it whenever leading
-/// whitespace is data — notably `git status --porcelain`, where the first column
+/// whitespace is data - notably `git status --porcelain`, where the first column
 /// is a space when a file has no staged change. Trimming would eat that space on
 /// the first record and shift the whole line ("Cargo.lock" → "argo.lock").
 pub fn git_capture_raw(repo: &str, args: &[&str]) -> Option<String> {

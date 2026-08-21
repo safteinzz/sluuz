@@ -20,7 +20,7 @@ pub struct FileEntry {
     pub path: String,
 }
 
-/// Hashes reachable from local branches but on **no** remote — i.e. commits you
+/// Hashes reachable from local branches but on **no** remote - i.e. commits you
 /// haven't pushed anywhere. A commit not in this set is on some remote (pushed).
 /// Empty when the repo has no remotes (nothing is "pushed").
 pub fn load_unpushed(repo: &str) -> HashSet<String> {
@@ -54,7 +54,7 @@ pub fn load_commits(repo: &str, extra: &[&str], limit: usize) -> Vec<Commit> {
         .unwrap_or_default()
 }
 
-/// The files a commit touched, with their status (cheap — no diff content).
+/// The files a commit touched, with their status (cheap - no diff content).
 /// When `pathspec` is non-empty, only files matching it are returned (so a
 /// path-filtered `ilog` shows just that file's change in each commit).
 pub fn load_files(repo: &str, hash: &str, pathspec: &[&str]) -> Vec<FileEntry> {

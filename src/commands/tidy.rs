@@ -1,9 +1,9 @@
-//! `slu tidy` — find local branches whose upstream is **gone** (the remote
+//! `slu tidy` - find local branches whose upstream is **gone** (the remote
 //! branch they tracked was deleted) across every repo under a path, with how
 //! long since each was last touched.
 //!
-//! These are the genuinely-finished branches — e.g. a merged PR the remote
-//! auto-deleted — the same set `slu itidy` offers to delete interactively.
+//! These are the genuinely-finished branches - e.g. a merged PR the remote
+//! auto-deleted - the same set `slu itidy` offers to delete interactively.
 //! Branches still alive on the remote, or that never had an upstream, are left
 //! alone. This is the non-interactive, multi-repo view; `slu itidy` is the TUI.
 
@@ -67,7 +67,7 @@ pub fn run(args: Args) {
             format!("📁 {}", name).bold(),
             format!("(on {})", current).dimmed()
         );
-        println!("   {}", "upstream gone — safe to delete:".dimmed());
+        println!("   {}", "upstream gone - safe to delete:".dimmed());
 
         let width = merged.iter().map(|b| b.name.len()).max().unwrap_or(0);
         for b in &merged {
@@ -104,7 +104,7 @@ pub fn run(args: Args) {
 /// deleted), excluding the checked-out `current` branch, each with a relative
 /// "last commit" age. Same detection as `slu itidy`.
 ///
-/// `%(refname)` is stripped to the plain branch name ourselves — `%(refname:short)`
+/// `%(refname)` is stripped to the plain branch name ourselves - `%(refname:short)`
 /// would return `heads/v0.2.20` when a tag of the same name exists, which
 /// `git branch -d` can't take.
 fn gone_branches(repo: &str, current: &str) -> Vec<Branch> {

@@ -8,7 +8,7 @@ use crate::git::git_capture;
 use ratatui::DefaultTerminal;
 use std::process::Command;
 
-/// git's magic empty-tree hash — the "before" side for a root commit that has no
+/// git's magic empty-tree hash - the "before" side for a root commit that has no
 /// parent to diff against.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -22,7 +22,7 @@ fn has_difftool(dir: &str) -> bool {
 }
 
 /// Open one commit's file in the user's difftool, comparing it against its first
-/// parent (or the empty tree for a root commit) — mirroring what `git show`
+/// parent (or the empty tree for a root commit) - mirroring what `git show`
 /// displays. Returns a status line for the caller to surface.
 pub fn difftool_commit(
     terminal: &mut DefaultTerminal,
@@ -47,7 +47,7 @@ fn commit_has_parent(dir: &str, hash: &str) -> bool {
 
 /// Suspend the TUI, run `git -C <dir> difftool -y <args>` with the terminal
 /// handed over (so a terminal tool like vimdiff works), then re-enter. Bails
-/// cleanly — no screen flicker — when no difftool is configured. Returns "" on
+/// cleanly - no screen flicker - when no difftool is configured. Returns "" on
 /// success, else a short message to show the user.
 pub fn run_difftool(
     terminal: &mut DefaultTerminal,
@@ -56,7 +56,7 @@ pub fn run_difftool(
     args: &[&str],
 ) -> String {
     if !has_difftool(dir) {
-        return "no difftool set — configure one: git config --global diff.tool <tool>".to_string();
+        return "no difftool set - configure one: git config --global diff.tool <tool>".to_string();
     }
 
     // Hand the terminal back to the external tool.

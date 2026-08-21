@@ -1,15 +1,26 @@
 <!--
-AI-ONLY DOCUMENT. This file exists to give an AI agent the COMPLETE operating picture for this repo. Optimize for completeness and precision for the agent, not for human readability. Humans read README.md instead. Do not remove detail to make this nicer — err toward more explicit, not less. FORMAT: machine-read, not a formatted human doc. Do NOT hard-wrap lines to a column width for readability; put each rule/point on ONE line, however long.
+AI-ONLY DOCUMENT. This file exists to give an AI agent the COMPLETE operating picture for this repo. Optimize for completeness and precision for the agent, not for human readability. Humans read README.md instead. Do not remove detail to make this nicer, err toward more explicit, not less. FORMAT: machine-read, not a formatted human doc. Do NOT hard-wrap lines to a column width for readability; put each rule/point on ONE line, however long.
 -->
 # AGENTS.md
 
+Working brief for an AI coding agent, not documentation for people (the README covers that): the rules, invariants and gotchas needed to change this project correctly without rediscovering them.
+
 ## Hard rules
-- **Commit, push, and publish only when the user says to ship.** They test interactively first; a mid-work commit is never the deliverable.
-- Release flow, in this exact order: `cargo clippy` warning-clean (+ `cargo test` if a suite exists) → bump `version` in `Cargo.toml` → one commit (short conventional message, never co-authored) → `git push origin main` → `cargo publish` (dry-run first; publishing is irreversible) → **tag only after publish succeeds**: `git tag vX.Y.Z && git push origin --tags`. A tag must never point at a version that failed to publish.
-- Commit messages: short conventional tags (`feat:`, `fix:`, ...). **Never** add a `Co-Authored-By` trailer.
-- **No em-dashes** anywhere user-facing (README, --help, crate description, commit messages, prose) - they read as AI-generated text.
+- Commit, push, and publish only when the user says to ship; a mid-work commit is never the deliverable, because the user tests interactively first.
+- Commit messages are short single-line conventional ones (`feat:`, `fix:`, `chore:`, ...), never with a `Co-Authored-By` trailer and never with a verbose body.
+- Release flow, in this exact order: write the regression tests for what is about to ship -> bump `version` in `Cargo.toml` -> `cargo clippy-all` clean and `cargo test` green, which is also what refreshes `Cargo.lock` with the new version -> one commit -> `git push origin main` -> `cargo publish` (dry-run first, publishing is irreversible) -> tag only after publish succeeds with `git tag vX.Y.Z && git push origin --tags`; a tag must never point at a version that failed to publish, and the bump comes first because `cargo publish` fails on a `Cargo.lock` that still holds the old version.
+- Tests are written at ship time and only then: covering the behaviour that just settled is the first step of the release flow, so the suite grows once per release instead of once per commit.
+- Never write a test for behaviour that has not shipped yet, because code that is not in the last release tag is still being designed, and a test pinning a shape that is about to change is how a suite starts lying.
+- A test may only assert something the README or `--help` promises, or a pure-logic invariant (parsing, generation, path resolution, validation); never the shape of a private function and never the specific diff that was just made, since those rot on the next refactor and teach nothing about whether the program works.
+- Removing a promise from the README removes its tests in the same commit.
+- A test may only write inside a temp directory it deletes, never a real config, data, cache or content directory and never a fixed path, so a machine is left exactly as it was before the suite ran.
+- Never drive the interface to test it: build it, say what changed and what to look at, and let the user run it, because they see the screen instantly while an agent driving a pty or a tmux pane is slow and wrong about what it looks like; logic that is not visual can still be checked directly from `tests/`.
+- Never `cargo install` to test: run the release binary at `./target/release/slu` directly, because installing replaces the binary on PATH with a work-in-progress build; install only when the user asks.
+- `main` is protected: no force-push and no history rewrite, so a mistake is fixed with a forward commit.
+- No em-dashes anywhere (code, comments, README, `--help`, crate description, commit messages, prose), because they read as AI-generated text; use `-` instead.
+- Fix the root cause, and if a workaround must ship say the word "workaround" out loud so a silent patch never passes as a real fix; the same goes for lints, where an `#[allow]` is never the answer and the code it points at gets fixed or deleted.
+- `TODO-LIST.md` (gitignored) holds one-line ideas, and the line is deleted when the idea ships.
 - **Never shadow a real git command** - passthrough is the whole premise, so an enhanced view always gets a distinct verb (`trace`, not `log`; the `i` prefix for interactive: `irepos`/`ilog`/`ibranch`/`istatus`/`itidy`/`iscan`).
-- Fix the root cause. If a workaround must ship, say the word "workaround" out loud, so a silent patch never passes as a real fix. Same for lints: never `#[allow]` a warning away; delete or fix the code it points at.
 - Scratch/test git repos go in `test-playground/` (gitignored). Build them there and **leave them** - the user opens them to test the TUIs by hand.
 
 ## Invariants and gotchas
@@ -23,7 +34,6 @@ AI-ONLY DOCUMENT. This file exists to give an AI agent the COMPLETE operating pi
 - **When reading a branch name to feed `git branch -d`:** take `%(refname)` and strip `refs/heads/`. `%(refname:short)` returns `heads/v1.2.3` when a tag shares the name, which `git branch -d` then rejects.
 - **When adding a level to the drill** (repos → branches → commits → files → diff): it is ONE app in `src/app/`, not one per command. Add the `Level`, its scope slider, its `enter_*` loader, an arm in `app/keys.rs` and one in `app/ui.rs`. `irepos`/`ibranch`/`ilog` are ~40-line commands that only pick the level to start at, and `Esc` quits at whichever level that was (`App::back`).
 - **When a level's bottom pane previews the next level down:** load that pane on the selection move, and load the level *below* it only on `Enter`. Loading eagerly all the way down costs a `git log` on every keypress of the repo list.
-- **When verifying a TUI change:** drive it in a pty rather than eyeballing it. Spawn `slu` on a `pty.openpty()` sized *before* the child starts (ratatui reads the size once at init; a 0x0 terminal draws nothing), feed keystrokes, then replay the captured bytes through `pyte` to get the final screen as text. Diffing that screen before and after a refactor is what proved `istatus`/`iscan`/`itidy` came through byte-identical. Note `supports_keyboard_enhancement()` blocks ~2s waiting for a reply no fake pty sends, so allow for it.
 - **When behavior doesn't match the code you just wrote:** the debug binary is stale. `cargo clean -p sluuz`, then rebuild.
 - `syntect` is pinned to `default-features=false` + `default-fancy` - the pure-Rust regex backend, so there's no C/oniguruma and it builds on Windows. Don't "fix" the feature flags.
 - `slu completions` delegates to git's own completion (that's the only way branch names complete). git's completion is **lazy-loaded**, and completing `slu` never trips that loader - so the emitted script force-loads it.
@@ -31,14 +41,14 @@ AI-ONLY DOCUMENT. This file exists to give an AI agent the COMPLETE operating pi
 - VS Code's integrated terminal cannot distinguish `Ctrl-J` from `Enter` on any OS (not just Windows). The fix is a user `keybindings.json` remap to `Ctrl-Down` - see README Troubleshooting; there is no code-side fix.
 
 ## Build / lint / test
-- `cargo build` (debug) · `cargo build --release`
-- `cargo clippy` - must be warning-clean before any release.
-- Run the dev binary directly: `./target/debug/slu <cmd>` (there is no dev.sh).
-- `cargo test` - unit tests live in `#[cfg(test)] mod tests` inside the file they cover (`commands/ilog.rs`, `commands/iscan.rs`), plus `tests/readme.rs`. **Coverage is thin and all of it is pure logic**; the TUIs themselves have none, so new *pure logic* (parsing, branch classification, scope filtering) should always get a unit test - throwaway manual checks let regressions through (see stowe's `tests/cli.rs` for the pattern).
+- `cargo build --release`, binary at `target/release/slu`.
+- `cargo clippy-all` is the lint pass, aliased in `.cargo/config.toml` to `clippy --release --all-targets -- -D warnings`; use it rather than a bare `cargo clippy`, which skips `tests/` and `examples/` and only warns where the release flow wants a failure.
+- `cargo test`.
+- Run the debug binary directly as `./target/debug/slu <cmd>` (there is no dev.sh).
+- Unit tests live in a `#[cfg(test)] mod tests` inside the file they cover (`commands/ilog.rs`, `commands/iscan.rs`), plus `tests/readme.rs`; all of it is pure logic, since the TUIs have none.
 
 ## Overview
 `sluuz` is a Rust CLI on crates.io that is a **git superset**: the binary is `slu` (a 3-letter stand-in for `git`). Anything git understands is passed straight through to real git; on top, `slu` adds cross-repo management, history/secret search, a prettier log, and interactive TUIs. Crate `sluuz`, binary `slu`, AGPL-3.0-only.
-
 Layout:
 - `src/main.rs` - the clap `Cmd` enum + `passthrough()`, nothing else.
 - `src/git.rs` - repo discovery, `git_capture{,_raw}`/`git_run`, `RepoStatus`, `SEP`.
@@ -48,4 +58,4 @@ Layout:
 - `src/commands/` - one file per command. `iscan`, `istatus` and `itidy` stay standalone (a query bar, a staging area and a confirm popup have no place in a nav stack) but wear the same shape: a state struct, `on_key`, `draw`.
 
 ## Self-repair
-If this file contradicts the code, **the code wins** - fix AGENTS.md in the same session you notice.
+If anything here contradicts the code, the code wins; fix AGENTS.md in the same session you notice the drift.

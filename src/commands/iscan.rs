@@ -1,4 +1,4 @@
-//! `slu iscan` — interactive history search (TUI). The query lives in the tool,
+//! `slu iscan` - interactive history search (TUI). The query lives in the tool,
 //! not in flags: you type terms into the bar and it pickaxes them across every
 //! branch of every repo under you.
 //!
@@ -123,7 +123,7 @@ struct App {
 
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu iscan needs an interactive terminal — use `slu scan` for plain output");
+        eprintln!("slu iscan needs an interactive terminal - use `slu scan` for plain output");
         return;
     }
 

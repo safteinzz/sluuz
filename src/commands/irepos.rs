@@ -1,4 +1,4 @@
-//! `slu irepos` — interactive repo explorer (TUI). The top of the drill: every
+//! `slu irepos` - interactive repo explorer (TUI). The top of the drill: every
 //! repo under a path, then its branches, its commits, and their diffs.
 //!
 //! Repos (top, j/k) preview the selected one's branches below (Ctrl-j/k), with
@@ -27,7 +27,7 @@ pub struct Args {
 
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu irepos needs an interactive terminal — use `slu repos` for plain output");
+        eprintln!("slu irepos needs an interactive terminal - use `slu repos` for plain output");
         return;
     }
 

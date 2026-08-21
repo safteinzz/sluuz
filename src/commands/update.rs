@@ -1,4 +1,4 @@
-//! `slu update` — update sluuz itself to the latest release on crates.io.
+//! `slu update` - update sluuz itself to the latest release on crates.io.
 //!
 //! Shells out to `cargo install sluuz --force`. Note the crate is `sluuz` even
 //! though the command you type is `slu`, so that's what cargo reinstalls.
@@ -6,7 +6,7 @@
 //! Windows can't overwrite a running `.exe`, so cargo's final move would fail
 //! with "Access is denied". To work around that we rename the running
 //! `slu.exe` aside first (Windows allows renaming, just not overwriting, a
-//! running binary) — which frees the path for cargo. If the install fails we
+//! running binary) - which frees the path for cargo. If the install fails we
 //! move it back so the user is never left without a binary.
 
 use colored::Colorize;
