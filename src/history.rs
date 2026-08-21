@@ -60,7 +60,10 @@ pub fn pickaxe(repo: &str, terms: &[String], case_insensitive: bool) -> Vec<Comm
     }
 
     // Preserve first-seen order (roughly newest-first from the first term's run).
-    order.into_iter().filter_map(|h| by_hash.remove(&h)).collect()
+    order
+        .into_iter()
+        .filter_map(|h| by_hash.remove(&h))
+        .collect()
 }
 
 /// List the branches (local and remote) that contain `hash`.
@@ -97,11 +100,12 @@ fn run_log(repo: &str, term: &str, case_insensitive: bool) -> Option<String> {
         cmd.arg("-i"); // --regexp-ignore-case, also applies to -S
     }
     cmd.args([
-        "-S", term,                                   // pickaxe: count of term changed
-        "-F",                                         // term is a fixed string, not regex
+        "-S",
+        term, // pickaxe: count of term changed
+        "-F", // term is a fixed string, not regex
         "--date=short",
         "--pretty=format:COMMIT:%h|%H|%ad|||%s",
-        "-p",                                         // include the patch
+        "-p", // include the patch
     ]);
     let output = cmd.output().ok()?;
     Some(String::from_utf8_lossy(&output.stdout).into_owned())

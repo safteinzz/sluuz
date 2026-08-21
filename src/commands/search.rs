@@ -49,7 +49,10 @@ pub fn run(args: Args) {
             if commits.is_empty() {
                 return None;
             }
-            Some((name.clone(), format_repo(&name, repo_str, &commits, args.limit)))
+            Some((
+                name.clone(),
+                format_repo(&name, repo_str, &commits, args.limit),
+            ))
         })
         .collect();
 
@@ -95,7 +98,10 @@ fn format_repo(name: &str, repo: &str, commits: &[CommitMatch], limit: usize) ->
         for file in &commit.files {
             out.push_str(&format!("    {}\n", file.path.blue().bold()));
             if file.lines.is_empty() {
-                out.push_str(&format!("      {}\n", "(binary or no visible diff)".dimmed()));
+                out.push_str(&format!(
+                    "      {}\n",
+                    "(binary or no visible diff)".dimmed()
+                ));
             }
             for (is_addition, line) in &file.lines {
                 if *is_addition {

@@ -37,7 +37,8 @@ pub fn run(args: Args) {
     // subdirectory would look for `<root>/.env`.
     let prefix = git_capture(".", &["rev-parse", "--show-prefix"]).unwrap_or_default();
     let paths: Vec<String> = args.paths.iter().map(|p| rebase_path(p, &prefix)).collect();
-    let repo = git_capture(".", &["rev-parse", "--show-toplevel"]).unwrap_or_else(|| ".".to_string());
+    let repo =
+        git_capture(".", &["rev-parse", "--show-toplevel"]).unwrap_or_else(|| ".".to_string());
 
     // Build the `git log` args: [--all] then `-- <paths>` to filter to a file.
     let mut log_args: Vec<String> = Vec::new();

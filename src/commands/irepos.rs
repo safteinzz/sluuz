@@ -6,7 +6,7 @@
 //! `h`/`l` slide the scope between dirty, all, and unpushed. Enter drills in,
 //! Esc steps back, and quits here.
 
-use crate::app::{repo_scope, App};
+use crate::app::{App, repo_scope};
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 

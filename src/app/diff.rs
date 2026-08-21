@@ -4,9 +4,9 @@
 //! re-lay-out the spans that pass already produced.
 
 use super::{App, Level};
+use crate::git::load::load_diff_raw;
 use crate::tui::difftool::difftool_commit;
 use crate::tui::highlight::{prepare_diff, render_prepared};
-use crate::git::load::load_diff_raw;
 use crate::tui::{clamp_hscroll, clamp_scroll, half_page, pane_height};
 use ratatui::DefaultTerminal;
 
@@ -65,7 +65,11 @@ impl App {
 
     /// Keep the last line from scrolling up past the top of the viewport.
     pub(super) fn clamp_diff(&mut self, terminal: &DefaultTerminal) {
-        self.diff_scroll = clamp_scroll(self.diff_scroll, self.diff.lines.len(), pane_height(terminal));
+        self.diff_scroll = clamp_scroll(
+            self.diff_scroll,
+            self.diff.lines.len(),
+            pane_height(terminal),
+        );
     }
 
     /// Hand the file to the user's `git difftool`, then take the terminal back.

@@ -1,7 +1,7 @@
 //! The branches level: one repo's branches, and picking one to read.
 
 use super::App;
-use crate::git::{git_capture, SEP};
+use crate::git::{SEP, git_capture};
 
 pub struct Branch {
     pub is_head: bool,
@@ -83,7 +83,13 @@ impl App {
         );
         self.branches = git_capture(
             &self.repo,
-            &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads", "refs/remotes"],
+            &[
+                "for-each-ref",
+                "--sort=-committerdate",
+                &fmt,
+                "refs/heads",
+                "refs/remotes",
+            ],
         )
         .map(|out| {
             out.lines()

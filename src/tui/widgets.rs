@@ -1,11 +1,11 @@
 //! Row renderers and pane furniture shared by every view.
 
 use crate::git::load::{Commit, FileEntry};
+use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState};
-use ratatui::Frame;
 
 /// Render a commit row. `unpushed` prepends a yellow `↑` marker (this commit is
 /// on no remote yet); pushed commits get an aligning blank so columns line up.
@@ -13,16 +13,24 @@ pub fn commit_item(c: &Commit, unpushed: bool) -> ListItem<'static> {
     let mark = if unpushed {
         Span::styled(
             "↑ ",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::raw("  ")
     };
     ListItem::new(Line::from(vec![
         mark,
-        Span::styled(format!("{:<8}", c.short), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("{:<8}", c.short),
+            Style::default().fg(Color::Yellow),
+        ),
         Span::styled(format!("{}  ", c.date), Style::default().fg(Color::Green)),
-        Span::styled(format!("<{}> ", c.committer), Style::default().fg(Color::Blue)),
+        Span::styled(
+            format!("<{}> ", c.committer),
+            Style::default().fg(Color::Blue),
+        ),
         Span::raw(c.subject.clone()),
     ]))
 }

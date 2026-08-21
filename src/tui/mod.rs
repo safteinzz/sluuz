@@ -11,12 +11,12 @@ pub mod highlight;
 pub mod input;
 pub mod widgets;
 
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::crossterm::{execute, ExecutableCommand};
-use ratatui::DefaultTerminal;
+use ratatui::crossterm::{ExecutableCommand, execute};
 use std::io::stdout;
 
 // ── keyboard enhancement (kitty protocol) ───────────────────────────────────

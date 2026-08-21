@@ -14,16 +14,16 @@
 //!
 //! For the non-interactive, multi-repo view, use `slu tidy`.
 
-use crate::git::{git_capture, git_run, SEP};
-use crate::tui::{pop_keyboard_enhancement, push_keyboard_enhancement};
-use crate::tui::input::{is_back, is_down, is_left, is_right, is_up, norm_esc, X_MOVE, Y_MOVE};
+use crate::git::{SEP, git_capture, git_run};
+use crate::tui::input::{X_MOVE, Y_MOVE, is_back, is_down, is_left, is_right, is_up, norm_esc};
 use crate::tui::widgets::{list_scrollbar, pane_block};
+use crate::tui::{pop_keyboard_enhancement, push_keyboard_enhancement};
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
-use ratatui::DefaultTerminal;
 use std::io::{self, IsTerminal};
 
 #[derive(clap::Args)]
@@ -51,7 +51,9 @@ struct App {
 
 pub fn run(_args: Args) {
     if !io::stdout().is_terminal() {
-        eprintln!("slu itidy needs an interactive terminal - use `slu tidy` for the scriptable view");
+        eprintln!(
+            "slu itidy needs an interactive terminal - use `slu tidy` for the scriptable view"
+        );
         return;
     }
 
@@ -169,8 +171,7 @@ impl App {
 }
 
 fn draw(frame: &mut ratatui::Frame, app: &mut App) {
-    let areas =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(frame.area());
+    let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(frame.area());
 
     let title = if app.branches.is_empty() {
         " no branches with a deleted upstream - nothing to tidy ".to_string()
@@ -211,7 +212,9 @@ fn confirm_popup(frame: &mut ratatui::Frame, name: &str, yes: bool) {
         Line::from(""),
         Line::from(Span::styled(
             truncate(name, area.width.saturating_sub(4) as usize),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         buttons,
@@ -268,8 +271,14 @@ fn gone_item(b: &Gone) -> ListItem<'static> {
             format!("{:<32}", truncate(&b.name, 32)),
             Style::default().fg(Color::Cyan),
         ),
-        Span::styled("[gone]", Style::default().fg(Color::Red).add_modifier(Modifier::DIM)),
-        Span::styled(format!("  {:<16}", b.age), Style::default().fg(Color::Magenta)),
+        Span::styled(
+            "[gone]",
+            Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+        ),
+        Span::styled(
+            format!("  {:<16}", b.age),
+            Style::default().fg(Color::Magenta),
+        ),
         Span::styled(format!("  {}", b.author), Style::default().fg(Color::Blue)),
     ]))
 }
@@ -282,26 +291,32 @@ fn load_gone() -> Vec<Gone> {
     let fmt = format!(
         "--format=%(refname){SEP}%(upstream:track){SEP}%(committerdate:relative){SEP}%(authorname)"
     );
-    git_capture(".", &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads"])
-        .map(|out| {
-            out.lines()
-                .filter_map(|line| {
-                    let mut f = line.split(SEP);
-                    let refname = f.next()?;
-                    let track = f.next()?;
-                    // `[gone]` marks a tracking branch whose remote was deleted.
-                    if !track.contains("gone") {
-                        return None;
-                    }
-                    Some(Gone {
-                        name: refname.strip_prefix("refs/heads/").unwrap_or(refname).to_string(),
-                        age: f.next().unwrap_or("").to_string(),
-                        author: f.next().unwrap_or("").to_string(),
-                    })
+    git_capture(
+        ".",
+        &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads"],
+    )
+    .map(|out| {
+        out.lines()
+            .filter_map(|line| {
+                let mut f = line.split(SEP);
+                let refname = f.next()?;
+                let track = f.next()?;
+                // `[gone]` marks a tracking branch whose remote was deleted.
+                if !track.contains("gone") {
+                    return None;
+                }
+                Some(Gone {
+                    name: refname
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(refname)
+                        .to_string(),
+                    age: f.next().unwrap_or("").to_string(),
+                    author: f.next().unwrap_or("").to_string(),
                 })
-                .collect()
-        })
-        .unwrap_or_default()
+            })
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// First non-empty line of git output, for a compact one-line message.

@@ -4,7 +4,7 @@
 //! far ahead/behind its upstream it is - so "which of my repos have uncommitted
 //! or unpushed work?" is one command instead of cd-ing through each.
 
-use crate::git::{find_repos, repo_status, RepoStatus};
+use crate::git::{RepoStatus, find_repos, repo_status};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::PathBuf;

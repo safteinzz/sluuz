@@ -21,9 +21,9 @@ pub fn find_repos(base: &Path, max_depth: usize) -> Vec<PathBuf> {
         .max_depth(max_depth)
         .follow_links(false)
         .into_iter()
-        .filter_map(|entry| entry.ok())                                         // skip permission errors
+        .filter_map(|entry| entry.ok()) // skip permission errors
         .filter(|entry| entry.file_name() == ".git" && entry.file_type().is_dir())
-        .filter_map(|entry| entry.path().parent().map(Path::to_path_buf))       // .git → repo root
+        .filter_map(|entry| entry.path().parent().map(Path::to_path_buf)) // .git → repo root
         .collect()
 }
 
@@ -155,7 +155,6 @@ pub fn short_remote(url: &str) -> String {
     stripped.to_string()
 }
 
-
 /// Get a human-readable repo name from its path (its directory name).
 pub fn display_name(repo: &Path) -> String {
     repo.canonicalize()
@@ -167,7 +166,12 @@ pub fn display_name(repo: &Path) -> String {
 /// Run `git -C <repo> <args>` and return trimmed stdout, or None if git fails
 /// or exits non-zero. For read-only queries where you only want the output.
 pub fn git_capture(repo: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -179,7 +183,12 @@ pub fn git_capture(repo: &str, args: &[&str]) -> Option<String> {
 /// is a space when a file has no staged change. Trimming would eat that space on
 /// the first record and shift the whole line ("Cargo.lock" → "argo.lock").
 pub fn git_capture_raw(repo: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").arg("-C").arg(repo).args(args).output().ok()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -234,7 +243,10 @@ mod tests {
             short_remote("https://token@github.com/o/r.git"),
             "github.com:o/r"
         );
-        assert_eq!(short_remote("ssh://git@host.example:2222/o/r.git"), "host.example:o/r");
+        assert_eq!(
+            short_remote("ssh://git@host.example:2222/o/r.git"),
+            "host.example:o/r"
+        );
     }
 
     #[test]

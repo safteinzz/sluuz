@@ -14,26 +14,26 @@
 //! Scanning is slow (pickaxe over every commit of every branch of every repo),
 //! so it happens on submit, with the screen showing that it is working.
 
+use crate::git::load::load_diff_raw;
 use crate::git::{display_name, find_repos};
 use crate::history::{self, CommitMatch};
+use crate::tui::difftool::difftool_commit;
+use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
+use crate::tui::input::{
+    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_back, is_down, is_left, is_open, is_right, is_up,
+    norm_esc,
+};
+use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use crate::tui::{
     clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
     push_keyboard_enhancement,
 };
-use crate::tui::difftool::difftool_commit;
-use crate::tui::highlight::{prepare_diff, render_prepared, RenderedDiff};
-use crate::tui::input::{
-    is_back, is_down, is_left, is_open, is_right, is_up, norm_esc, CTRL_X_MOVE, CTRL_Y_MOVE,
-    X_MOVE, Y_MOVE,
-};
-use crate::git::load::load_diff_raw;
-use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use ratatui::DefaultTerminal;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 
@@ -204,8 +204,11 @@ impl App {
                 break;
             }
             if self.mode == Mode::Browsing {
-                self.diff_scroll =
-                    clamp_scroll(self.diff_scroll, self.diff.lines.len(), pane_height(terminal));
+                self.diff_scroll = clamp_scroll(
+                    self.diff_scroll,
+                    self.diff.lines.len(),
+                    pane_height(terminal),
+                );
             }
         }
         Ok(())
@@ -274,7 +277,8 @@ impl App {
                 self.cursor += 1;
             }
             KeyCode::Backspace if self.cursor > 0 => {
-                self.query.remove(char_to_byte(&self.query, self.cursor - 1));
+                self.query
+                    .remove(char_to_byte(&self.query, self.cursor - 1));
                 self.cursor -= 1;
             }
             KeyCode::Delete if self.cursor < self.query.chars().count() => {
@@ -467,7 +471,11 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     }
 
     // ── hits ──
-    let items: Vec<ListItem> = app.visible.iter().map(|&i| hit_item(&app.hits[i])).collect();
+    let items: Vec<ListItem> = app
+        .visible
+        .iter()
+        .map(|&i| hit_item(&app.hits[i]))
+        .collect();
     let scope = if app.scope_idx == 0 || app.terms.is_empty() {
         "all terms".to_string()
     } else {
@@ -512,7 +520,13 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_widget(diff, areas[2]);
     diff_scrollbar(frame, areas[2], app.diff.lines.len(), app.diff_scroll);
     let cell = app.prepared.cell_width(areas[2].width.saturating_sub(2));
-    diff_hscrollbar(frame, areas[2], app.prepared.max_line(), cell, app.diff_hscroll);
+    diff_hscrollbar(
+        frame,
+        areas[2],
+        app.prepared.max_line(),
+        cell,
+        app.diff_hscroll,
+    );
 }
 
 fn hit_item(h: &Hit) -> ListItem<'static> {
@@ -530,7 +544,10 @@ fn hit_item(h: &Hit) -> ListItem<'static> {
             format!("{:<18}", truncate(&h.repo, 18)),
             Style::default().fg(Color::Cyan),
         ),
-        Span::styled(format!("{:<9}", h.short), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("{:<9}", h.short),
+            Style::default().fg(Color::Yellow),
+        ),
         Span::styled(format!("{}  ", h.date), Style::default().fg(Color::Magenta)),
         Span::styled(
             format!("{:<26}", truncate(&h.file, 26)),
@@ -550,7 +567,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_terms, terms_in, Hit};
+    use super::{Hit, parse_terms, terms_in};
 
     fn hit(matched: Vec<usize>) -> Hit {
         Hit {

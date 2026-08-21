@@ -48,7 +48,12 @@ pub fn run(args: Args) {
 
     println!(
         "{} {} repo(s)…\n",
-        if args.pull { "Fetching + pulling" } else { "Fetching" }.dimmed(),
+        if args.pull {
+            "Fetching + pulling"
+        } else {
+            "Fetching"
+        }
+        .dimmed(),
         repos.len()
     );
 
@@ -99,7 +104,11 @@ fn process(name: String, repo: &str, pull: bool) -> Outcome {
 
     if !pull {
         // Fetch output is empty when nothing new arrived.
-        let note = if out.is_empty() { "up to date" } else { "fetched" };
+        let note = if out.is_empty() {
+            "up to date"
+        } else {
+            "fetched"
+        };
         return Outcome {
             name,
             state: State::Ok,

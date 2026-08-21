@@ -7,7 +7,7 @@
 //! Branches still alive on the remote, or that never had an upstream, are left
 //! alone. This is the non-interactive, multi-repo view; `slu itidy` is the TUI.
 
-use crate::git::{display_name, find_repos, git_capture, SEP};
+use crate::git::{SEP, display_name, find_repos, git_capture};
 use colored::Colorize;
 use std::path::PathBuf;
 
@@ -87,7 +87,10 @@ pub fn run(args: Args) {
     }
 
     if total_branches == 0 {
-        println!("{}", "No branches with a gone upstream to clean up.".green());
+        println!(
+            "{}",
+            "No branches with a gone upstream to clean up.".green()
+        );
     } else {
         println!(
             "{}",
@@ -109,27 +112,30 @@ pub fn run(args: Args) {
 /// `git branch -d` can't take.
 fn gone_branches(repo: &str, current: &str) -> Vec<Branch> {
     let fmt = format!("--format=%(refname){SEP}%(upstream:track){SEP}%(committerdate:relative)");
-    git_capture(repo, &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads"])
-        .map(|out| {
-            out.lines()
-                .filter_map(|line| {
-                    let mut f = line.split(SEP);
-                    let refname = f.next()?;
-                    let track = f.next()?;
-                    // `[gone]` marks a tracking branch whose remote was deleted.
-                    if !track.contains("gone") {
-                        return None;
-                    }
-                    let name = refname.strip_prefix("refs/heads/").unwrap_or(refname);
-                    if name == current {
-                        return None; // can't delete the checked-out branch
-                    }
-                    Some(Branch {
-                        name: name.to_string(),
-                        age: f.next().unwrap_or("").to_string(),
-                    })
+    git_capture(
+        repo,
+        &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads"],
+    )
+    .map(|out| {
+        out.lines()
+            .filter_map(|line| {
+                let mut f = line.split(SEP);
+                let refname = f.next()?;
+                let track = f.next()?;
+                // `[gone]` marks a tracking branch whose remote was deleted.
+                if !track.contains("gone") {
+                    return None;
+                }
+                let name = refname.strip_prefix("refs/heads/").unwrap_or(refname);
+                if name == current {
+                    return None; // can't delete the checked-out branch
+                }
+                Some(Branch {
+                    name: name.to_string(),
+                    age: f.next().unwrap_or("").to_string(),
                 })
-                .collect()
-        })
-        .unwrap_or_default()
+            })
+            .collect()
+    })
+    .unwrap_or_default()
 }

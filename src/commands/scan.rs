@@ -132,7 +132,10 @@ fn print_summary(total_repos: usize, repos_with_hits: usize, total_hits: usize) 
             "  repos with hits : {}",
             repos_with_hits.to_string().red().bold()
         );
-        println!("  total hits      : {}", total_hits.to_string().red().bold());
+        println!(
+            "  total hits      : {}",
+            total_hits.to_string().red().bold()
+        );
         println!("\n  {}", "to remove a secret from history:".dimmed());
         println!(
             "  {}",

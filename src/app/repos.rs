@@ -1,7 +1,7 @@
 //! The repos level: every repo under a path, and picking one to drill into.
 
 use super::App;
-use crate::git::{find_repos, repo_status, RepoStatus};
+use crate::git::{RepoStatus, find_repos, repo_status};
 use rayon::prelude::*;
 use std::path::Path;
 
@@ -90,7 +90,6 @@ impl App {
         self.set_repo(self.repos[i].path.clone());
         self.rescope_branches();
     }
-
 }
 
 #[cfg(test)]
@@ -100,13 +99,19 @@ mod tests {
 
     #[test]
     fn a_repo_under_the_root_keeps_its_plain_name() {
-        assert_eq!(relative_name(Path::new("pg/hscroll"), Path::new("pg")), "hscroll");
+        assert_eq!(
+            relative_name(Path::new("pg/hscroll"), Path::new("pg")),
+            "hscroll"
+        );
     }
 
     #[test]
     fn a_nested_repo_is_named_by_its_path() {
         // Two `work` repos in one tree are only telling apart by where they sit.
-        assert_eq!(relative_name(Path::new("pg/itidy/work"), Path::new("pg")), "itidy/work");
+        assert_eq!(
+            relative_name(Path::new("pg/itidy/work"), Path::new("pg")),
+            "itidy/work"
+        );
         assert_eq!(
             relative_name(Path::new("pg/pushstate/work"), Path::new("pg")),
             "pushstate/work"
@@ -115,17 +120,29 @@ mod tests {
 
     #[test]
     fn scanning_the_current_directory_drops_the_dot() {
-        assert_eq!(relative_name(Path::new("./crates/vibox"), Path::new(".")), "crates/vibox");
-        assert_eq!(relative_name(Path::new("./hscroll"), Path::new(".")), "hscroll");
+        assert_eq!(
+            relative_name(Path::new("./crates/vibox"), Path::new(".")),
+            "crates/vibox"
+        );
+        assert_eq!(
+            relative_name(Path::new("./hscroll"), Path::new(".")),
+            "hscroll"
+        );
     }
 
     #[test]
     fn a_trailing_slash_on_the_root_changes_nothing() {
-        assert_eq!(relative_name(Path::new("/pg/crates/vibox"), Path::new("/pg/")), "crates/vibox");
+        assert_eq!(
+            relative_name(Path::new("/pg/crates/vibox"), Path::new("/pg/")),
+            "crates/vibox"
+        );
     }
 
     #[test]
     fn a_path_outside_the_root_falls_back_to_its_name() {
-        assert_eq!(relative_name(Path::new("/elsewhere/vibox"), Path::new("/pg")), "vibox");
+        assert_eq!(
+            relative_name(Path::new("/elsewhere/vibox"), Path::new("/pg")),
+            "vibox"
+        );
     }
 }

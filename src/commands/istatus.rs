@@ -11,21 +11,21 @@
 
 use crate::git::{git_capture, git_capture_raw, git_run};
 use crate::tui::difftool::run_difftool;
-use crate::tui::highlight::{prepare_diff, render_prepared, RenderedDiff};
+use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
 use crate::tui::input::{
-    is_down, is_left, is_right, is_up, norm_esc, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE,
+    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
 };
 use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use crate::tui::{
     clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
     push_keyboard_enhancement,
 };
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use ratatui::DefaultTerminal;
 use std::io::{self, IsTerminal};
 
 /// Rows a Ctrl-j/k moves the diff, columns a Ctrl-h/l pans it, and the PgUp/PgDn
@@ -182,7 +182,8 @@ impl App {
         if self.sel >= self.visible.len() {
             self.sel = self.visible.len().saturating_sub(1);
         }
-        self.state.select((!self.visible.is_empty()).then_some(self.sel));
+        self.state
+            .select((!self.visible.is_empty()).then_some(self.sel));
         self.diff_scroll = 0;
         self.diff_hscroll = 0;
         self.refresh_diff();
@@ -240,11 +241,7 @@ impl App {
             self.msg = Some("untracked - nothing to compare".to_string());
             return false;
         }
-        let args: &[&str] = if cached {
-            &["--cached", "--"]
-        } else {
-            &["--"]
-        };
+        let args: &[&str] = if cached { &["--cached", "--"] } else { &["--"] };
         let mut argv = args.to_vec();
         argv.push(&path);
         let dt = run_difftool(terminal, self.enhanced, &self.root, &argv);
@@ -278,8 +275,11 @@ impl App {
                         break;
                     }
                     self.on_key(code, ctrl, terminal);
-                    self.diff_scroll =
-                        clamp_scroll(self.diff_scroll, self.diff.lines.len(), pane_height(terminal));
+                    self.diff_scroll = clamp_scroll(
+                        self.diff_scroll,
+                        self.diff.lines.len(),
+                        pane_height(terminal),
+                    );
                 }
                 _ => {}
             }
@@ -439,7 +439,9 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let title = match &app.msg {
         Some(m) => format!(" {path}  ⚠ {m} "),
         None if path.is_empty() => " (nothing to show) ".to_string(),
-        None => format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan "),
+        None => {
+            format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan ")
+        }
     };
     let diff = Paragraph::new(app.diff.clone())
         .block(pane_block(title, true))
@@ -447,7 +449,13 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_widget(diff, areas[1]);
     diff_scrollbar(frame, areas[1], app.diff.lines.len(), app.diff_scroll);
     let cell = app.prepared.cell_width(areas[1].width.saturating_sub(2));
-    diff_hscrollbar(frame, areas[1], app.prepared.max_line(), cell, app.diff_hscroll);
+    diff_hscrollbar(
+        frame,
+        areas[1],
+        app.prepared.max_line(),
+        cell,
+        app.diff_hscroll,
+    );
 }
 
 /// Which side of the diff the bottom pane is showing.
@@ -467,7 +475,11 @@ fn status_item(e: &Entry) -> ListItem<'static> {
     let unstaged = Style::default().fg(Color::Red);
     let none = Style::default().fg(Color::DarkGray);
 
-    let (xc, xs) = if e.staged() { (e.x, staged) } else { (' ', none) };
+    let (xc, xs) = if e.staged() {
+        (e.x, staged)
+    } else {
+        (' ', none)
+    };
     let (yc, ys) = if e.untracked() {
         ('?', unstaged)
     } else if e.y != ' ' {

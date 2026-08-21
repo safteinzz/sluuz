@@ -100,7 +100,10 @@ pub fn prepare_diff(raw: &str) -> RenderedDiff {
                 old: HighlightLines::new(syntax, theme),
                 new: HighlightLines::new(syntax, theme),
             });
-            rows.push(DiffRow::Header(plain(line, dim().add_modifier(Modifier::BOLD))));
+            rows.push(DiffRow::Header(plain(
+                line,
+                dim().add_modifier(Modifier::BOLD),
+            )));
             continue;
         }
 
@@ -118,7 +121,10 @@ pub fn prepare_diff(raw: &str) -> RenderedDiff {
                 old_ln = a;
                 new_ln = c;
             }
-            rows.push(DiffRow::Header(plain(line, Style::default().fg(Color::Cyan))));
+            rows.push(DiffRow::Header(plain(
+                line,
+                Style::default().fg(Color::Cyan),
+            )));
             continue;
         }
         if is_meta(line) {

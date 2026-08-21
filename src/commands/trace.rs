@@ -6,7 +6,7 @@
 //! author). `--graph` keeps git's own commit graph (which we don't try to
 //! out-render) but enriches the per-commit line.
 
-use crate::git::{git_capture, SEP};
+use crate::git::{SEP, git_capture};
 use colored::Colorize;
 
 /// Committer name is capped at this width (long names get truncated).
@@ -105,7 +105,10 @@ fn graph_log(all: bool, limit: usize) {
     let parsed: Vec<(String, Option<Row>)> = out
         .lines()
         .map(|line| match line.find(REC) {
-            Some(i) => (line[..i].to_string(), parse_row(&line[i + REC.len_utf8()..])),
+            Some(i) => (
+                line[..i].to_string(),
+                parse_row(&line[i + REC.len_utf8()..]),
+            ),
             None => (line.to_string(), None),
         })
         .collect();

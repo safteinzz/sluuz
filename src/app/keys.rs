@@ -4,10 +4,10 @@
 //! the pane below it, `h`/`l` slide that level's scope, Enter drills in and Esc
 //! steps back out.
 
-use super::{branches, commits, repos, App, Level};
+use super::{App, Level, branches, commits, repos};
 use crate::tui::input::{is_back, is_down, is_left, is_open, is_right, is_up, norm_esc};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle one key press. Returns true when the app should quit.
 pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTerminal) -> bool {

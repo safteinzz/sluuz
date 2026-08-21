@@ -18,13 +18,13 @@ mod ui;
 pub use branches::Branch;
 
 use crate::git::RepoStatus;
-use crate::tui::highlight::RenderedDiff;
 use crate::git::load::{Commit, FileEntry};
+use crate::tui::highlight::RenderedDiff;
 use crate::tui::{pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
+use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::text::Text;
 use ratatui::widgets::ListState;
-use ratatui::DefaultTerminal;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
@@ -324,11 +324,7 @@ pub fn branch_scope(all: bool, remotes: bool) -> usize {
 
 /// Starting stop on the repo scope slider for `slu irepos --dirty`.
 pub fn repo_scope(dirty: bool) -> usize {
-    if dirty {
-        0
-    } else {
-        repos::DEFAULT_SCOPE
-    }
+    if dirty { 0 } else { repos::DEFAULT_SCOPE }
 }
 
 #[cfg(test)]
@@ -439,9 +435,15 @@ mod tests {
     fn a_branch_counts_as_unpushed_when_no_remote_has_it() {
         assert!(branch(false, false, "").unpushed(), "never pushed");
         assert!(branch(false, true, "[gone]").unpushed(), "upstream deleted");
-        assert!(branch(false, true, "[ahead 2]").unpushed(), "ahead of upstream");
+        assert!(
+            branch(false, true, "[ahead 2]").unpushed(),
+            "ahead of upstream"
+        );
         assert!(!branch(false, true, "").unpushed(), "in sync");
-        assert!(!branch(true, false, "").unpushed(), "a remote branch is on a remote");
+        assert!(
+            !branch(true, false, "").unpushed(),
+            "a remote branch is on a remote"
+        );
     }
 
     #[test]

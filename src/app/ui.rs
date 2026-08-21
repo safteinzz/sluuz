@@ -2,17 +2,17 @@
 //! below it underneath, and the file diff in place of that list at the bottom
 //! of the drill.
 
-use super::{branches, commits, repos, App, Level, Sel};
+use super::{App, Level, Sel, branches, commits, repos};
 use crate::git::RepoStatus;
 use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE};
 use crate::tui::widgets::{
     commit_item, diff_hscrollbar, diff_scrollbar, file_item, list_scrollbar, pane_block,
 };
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
-use ratatui::Frame;
 
 /// Width the branch name column is padded to, and the cap on the repo one,
 /// which grows to fit the paths actually on screen.
@@ -264,7 +264,9 @@ fn branch_items(app: &App) -> Vec<ListItem<'static>> {
 
 fn branch_item(b: &branches::Branch) -> ListItem<'static> {
     let name_style = if b.is_head {
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
     } else if b.remote {
         Style::default().fg(Color::Magenta)
     } else {
@@ -274,9 +276,15 @@ fn branch_item(b: &branches::Branch) -> ListItem<'static> {
     ListItem::new(Line::from(vec![
         Span::raw(if b.is_head { "● " } else { "  " }),
         Span::styled(format!("{mark:<2}"), mark_style),
-        Span::styled(format!("{:<NAME_W$}", truncate(&b.name, NAME_W)), name_style),
+        Span::styled(
+            format!("{:<NAME_W$}", truncate(&b.name, NAME_W)),
+            name_style,
+        ),
         Span::styled(format!("  {:<10}", b.status()), mark_style),
-        Span::styled(format!("  {:<14}", b.rel), Style::default().fg(Color::Magenta)),
+        Span::styled(
+            format!("  {:<14}", b.rel),
+            Style::default().fg(Color::Magenta),
+        ),
         Span::styled(format!("  {}", b.author), Style::default().fg(Color::Blue)),
     ]))
 }
@@ -293,7 +301,9 @@ fn branch_mark(b: &branches::Branch) -> (&'static str, Style) {
     if b.unpushed() {
         return (
             "↑",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         );
     }
     ("", Style::default().fg(Color::DarkGray))

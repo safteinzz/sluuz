@@ -4,7 +4,7 @@
 //! Every loader takes the repo to read, so one view can walk several repos in
 //! the same session. `"."` is the current one.
 
-use crate::git::{git_capture, SEP};
+use crate::git::{SEP, git_capture};
 use std::collections::HashSet;
 
 pub struct Commit {
