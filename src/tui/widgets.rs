@@ -1,6 +1,6 @@
 //! Row renderers and pane furniture shared by every view.
 
-use super::load::{Commit, FileEntry};
+use crate::git::load::{Commit, FileEntry};
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

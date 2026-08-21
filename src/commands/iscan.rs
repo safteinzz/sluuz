@@ -26,7 +26,7 @@ use crate::tui::input::{
     is_back, is_down, is_left, is_open, is_right, is_up, norm_esc, CTRL_X_MOVE, CTRL_Y_MOVE,
     X_MOVE, Y_MOVE,
 };
-use crate::tui::load::load_diff_raw;
+use crate::git::load::load_diff_raw;
 use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position};

@@ -1,4 +1,10 @@
 //! Shared git utility functions used across subcommands.
+//!
+//! `load` holds the queries behind the interactive views. They live here rather
+//! than under `tui/` because reading git is not terminal work, and a plain
+//! command may need the same query.
+
+pub mod load;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

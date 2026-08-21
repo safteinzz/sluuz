@@ -6,7 +6,7 @@
 use super::{App, Level};
 use crate::tui::difftool::difftool_commit;
 use crate::tui::highlight::{prepare_diff, render_prepared};
-use crate::tui::load::load_diff_raw;
+use crate::git::load::load_diff_raw;
 use crate::tui::{clamp_hscroll, clamp_scroll, half_page, pane_height};
 use ratatui::DefaultTerminal;
 

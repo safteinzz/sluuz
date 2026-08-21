@@ -2,7 +2,7 @@
 //! touched in the pane below.
 
 use super::App;
-use crate::tui::load;
+use crate::git::load;
 
 /// Push-state filter over the loaded commits.
 #[derive(Clone, Copy, PartialEq)]

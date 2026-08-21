@@ -1,5 +1,6 @@
 //! Shared building blocks for the interactive TUIs: terminal setup, key
-//! predicates, widgets, diff rendering, git loaders, and the difftool handoff.
+//! predicates, widgets, diff rendering, and the difftool handoff. Reading git is
+//! not terminal work, so the queries the views run live in `git::load`.
 //!
 //! Nothing in here knows about any one view. `app/` builds the repos → branches
 //! → commits → diff drill on top of it, and `iscan`/`istatus`/`itidy` use the
@@ -8,7 +9,6 @@
 pub mod difftool;
 pub mod highlight;
 pub mod input;
-pub mod load;
 pub mod widgets;
 
 use ratatui::crossterm::event::{

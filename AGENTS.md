@@ -52,10 +52,10 @@ Working brief for an AI coding agent, not documentation for people (the README c
 `sluuz` is a Rust CLI on crates.io that is a **git superset**: the binary is `slu` (a 3-letter stand-in for `git`). Anything git understands is passed straight through to real git; on top, `slu` adds cross-repo management, history/secret search, a prettier log, and interactive TUIs. Crate `sluuz`, binary `slu`, AGPL-3.0-only.
 Layout:
 - `src/main.rs` - the clap `Cmd` enum + `passthrough()`, nothing else.
-- `src/git.rs` - repo discovery, `git_capture{,_raw}`/`git_run`, `RepoStatus`, `SEP`.
+- `src/git.rs` - repo discovery, `git_capture{,_raw}`/`git_run`, `RepoStatus`, `SEP`, and `git/load.rs` for the queries the interactive views run (they sit here, not under `tui/`, because reading git is not terminal work and a plain command may need the same query).
 - `src/history.rs` - the pickaxe shared by `search`, `scan` and `iscan`.
 - `src/app/` - **the drill**: one `App` with a `Level` stack (repos → branches → commits → files → diff), split into `repos`/`branches`/`commits`/`diff` state, `keys.rs` for input and `ui.rs` for rendering. `irepos`, `ibranch` and `ilog` are three entry points into it.
-- `src/tui/` - primitives with no view knowledge: `input` (key predicates + hint labels), `widgets`, `highlight` (syntect), `difftool`, `load` (git loaders), and terminal setup in `mod.rs`.
+- `src/tui/` - primitives with no view knowledge: `input` (key predicates + hint labels), `widgets`, `highlight` (syntect), `difftool`, and terminal setup in `mod.rs`.
 - `src/commands/` - one file per command. `iscan`, `istatus` and `itidy` stay standalone (a query bar, a staging area and a confirm popup have no place in a nav stack) but wear the same shape: a state struct, `on_key`, `draw`.
 
 ## Self-repair

@@ -19,7 +19,7 @@ pub use branches::Branch;
 
 use crate::git::RepoStatus;
 use crate::tui::highlight::RenderedDiff;
-use crate::tui::load::{Commit, FileEntry};
+use crate::git::load::{Commit, FileEntry};
 use crate::tui::{pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::text::Text;
