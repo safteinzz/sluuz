@@ -10,3 +10,6 @@ GEMINI.md
 
 # Scratch git repos for testing the TUIs by hand
 /test-playground
+
+# Private reference material, never committed - see AGENTS.md
+/.nocommit
