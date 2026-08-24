@@ -1,6 +1,6 @@
 [package]
 name = "sluuz"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.88"
 description = "git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management"
@@ -11,8 +11,10 @@ repository = "https://gitlab.com/safteinzz/sluuz"
 keywords = ["git", "vcs", "tui", "cli", "secrets"]
 categories = ["command-line-utilities", "development-tools"]
 # README screenshots are fetched over the network by crates.io via absolute raw
-# URLs, never read out of the package, so shipping them would only bloat every download.
-exclude = ["readme-assets/", "legacy/"]
+# URLs, never read out of the package, so shipping them would only bloat every
+# download. `demo/` is the rig that renders them - source for the pictures, and
+# never needed to build or run the crate.
+exclude = ["readme-assets/", "legacy/", "demo/"]
 
 # The crate is `sluuz`, but the command you type is the shorter `slu`.
 [[bin]]

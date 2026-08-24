@@ -11,5 +11,12 @@ GEMINI.md
 # Scratch git repos for testing the TUIs by hand
 /test-playground
 
+# The demo rig's scratch: the staged HOME it builds, the `slu` symlink and the
+# rc file the staged shell reads. The tapes and stage.sh are the source and do
+# get committed.
+/demo/home/
+/demo/bin/
+/demo/shellrc
+
 # Private reference material, never committed - see AGENTS.md
 /.nocommit
