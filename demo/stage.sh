@@ -22,7 +22,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STAGE="$HERE/home"
 WORK="$STAGE/work"
 REMOTES="$STAGE/remotes"
+# The `slu` symlink lives inside the stage, so `down` takes it with one guarded
+# delete and nothing is left in demo/ to gitignore.
+BIN="$STAGE/.bin"
 SLU="$HERE/../target/release/slu"
+
+# Written by `up`, required by `down`. See the guard further down.
+MARKER=".slu-demo-stage"
 
 # The leaked credential the search, scan and iscan shots are all about. It is a
 # joke string, planted here, and it exists nowhere else.
@@ -37,6 +43,9 @@ SECRET="1337-let-me-in"
 # the stage sits inside sluuz's own checkout, so without a ceiling every prompt
 # and every discovery walks out of the fixtures and reports on sluuz instead -
 # which is how a screenshot of `~/work` ends up wearing this repo's branch.
+# Used with `env -i`, so this list is not "the real environment plus overrides"
+# but everything there is: overriding leaves whatever variable nobody thought of
+# still pointing at the real thing.
 stage_env() {
   echo "HOME=$STAGE" \
        "XDG_CONFIG_HOME=$STAGE/.config" \
@@ -44,13 +53,17 @@ stage_env() {
        "XDG_STATE_HOME=$STAGE/.local/state" \
        "XDG_CACHE_HOME=$STAGE/.cache" \
        "GIT_CONFIG_NOSYSTEM=1" \
-       "GIT_CEILING_DIRECTORIES=$STAGE"
+       "GIT_CEILING_DIRECTORIES=$STAGE" \
+       "PATH=$BIN:/usr/local/bin:/usr/bin:/bin" \
+       "TERM=${TERM:-xterm-256color}" \
+       "COLORTERM=truecolor" \
+       "LANG=C.UTF-8"
 }
 
 # Every git call in this script goes through here, so none of them can read or
 # write the real home. GIT_CONFIG_NOSYSTEM drops /etc/gitconfig too, which is
 # the one file a redirected HOME does not hide.
-g() { env $(stage_env) git "$@"; }
+g() { env -i $(stage_env) git "$@"; }
 
 # `c <repo> <seconds-ago> <who> <message>` - a commit with a chosen age, so the
 # relative dates on screen ("3 days ago") tell a story instead of all reading
@@ -70,7 +83,7 @@ c() {
     *)     name="$who";         email="$who@example.com" ;;
   esac
   g -C "$repo" add -A
-  env $(stage_env) \
+  env -i $(stage_env) \
       GIT_AUTHOR_NAME="$name" GIT_AUTHOR_EMAIL="$email" GIT_AUTHOR_DATE="$when" \
       GIT_COMMITTER_NAME="$name" GIT_COMMITTER_EMAIL="$email" GIT_COMMITTER_DATE="$when" \
       git -C "$repo" commit -q -m "$msg"
@@ -158,7 +171,7 @@ EOF
   c "$r" 3715200 marek "Unblock staging deploy"
 
   g -C "$r" checkout -q main
-  env $(stage_env) \
+  env -i $(stage_env) \
       GIT_AUTHOR_NAME="Marek Toth" GIT_AUTHOR_EMAIL="marek@example.com" \
       GIT_AUTHOR_DATE="@$((NOW - 3628800)) +0000" \
       GIT_COMMITTER_NAME="Marek Toth" GIT_COMMITTER_EMAIL="marek@example.com" \
@@ -658,6 +671,8 @@ up() {
   down_quiet
   NOW=$(date +%s)
   mkdir -p "$WORK" "$REMOTES"
+  # Stamp it before anything else, so a later `down` can prove this tree is ours.
+  : > "$STAGE/$MARKER"
   write_gitconfig
   build_billing_api
   build_checkout_service
@@ -668,45 +683,94 @@ up() {
   seal_remotes
   echo "staged in $STAGE"
   echo
-  env $(stage_env) sh -c "cd '$WORK' && '$SLU' repos"
+  env -i $(stage_env) sh -c "cd '$WORK' && '$SLU' repos"
   echo
   echo "  ./stage.sh shell   a shell where slu is this build"
   echo "  ./stage.sh down    delete it all"
 }
 
-# Nothing here mounts anything, but a recursive delete in a convenience script
-# gets one of these anyway: rm walks straight through a mountpoint onto whatever
-# is on the far side, and --one-file-system is what stops it.
+# ---------------------------------------------------------------------------
+# the teardown guard - identical in every crate's rig
+# ---------------------------------------------------------------------------
+# A rig is a convenience script with a recursive delete in it, run half
+# attentively while thinking about something else, against a path some scenario
+# may have mounted a remote filesystem onto. Both halves of that have already
+# happened in this workflow: a stage path that pointed somewhere real and was
+# deleted because the script trusted its own variable, and an sshfs mount inside
+# a staged home torn down with `rm -rf`, which walked through the mountpoint and
+# deleted the dotfiles on the machine at the far end. So the delete is proved
+# rather than trusted.
+refuse() { echo "REFUSING to delete $STAGE: $1" >&2; exit 1; }
+
+assert_safe_to_delete() {
+  case "$STAGE" in
+    /*) ;;
+    *) refuse "the stage path must be absolute" ;;
+  esac
+  # Resolve symlinks first: a link pointing the stage at something real must not
+  # let a delete through on the strength of a harmless-looking path.
+  local real
+  real="$(cd "$STAGE" && pwd -P)" || refuse "cannot resolve the path"
+  case "$real" in
+    / | /home | /root | /usr | /etc | /var | /opt | /srv | /boot | /tmp)
+      refuse "that is a system directory" ;;
+  esac
+  [ "$real" = "$HOME" ] && refuse "that is your home directory"
+  case "$HOME/" in
+    "$real"/*) refuse "your home directory is inside it" ;;
+  esac
+  # The real gate: only ever delete a tree this script built and stamped.
+  [ -f "$real/$MARKER" ] || refuse "no \`$MARKER\` in it, so this script did not build it"
+  # Unmount anything under it, longest path first, then check again: a recursive
+  # delete walks straight through a mountpoint and removes the far side.
+  local mp
+  while read -r mp; do
+    [ -n "$mp" ] || continue
+    echo "unmounting $mp"
+    fusermount -u "$mp" 2> /dev/null || umount "$mp" 2> /dev/null || true
+  done < <(awk -v s="$real/" '$2 ~ "^"s {print length($2), $2}' /proc/mounts |
+             sort -rn | cut -d' ' -f2-)
+  if awk -v s="$real/" '$2 ~ "^"s {found=1} END {exit !found}' /proc/mounts; then
+    refuse "something is still mounted under it; unmount it by hand and rerun"
+  fi
+}
+
 down_quiet() {
   [ -d "$STAGE" ] || return 0
-  if awk -v s="$STAGE/" '$2 ~ "^"s {found=1} END {exit !found}' /proc/mounts 2>/dev/null; then
-    echo "REFUSING to delete $STAGE: something is mounted under it." >&2
-    exit 1
-  fi
-  chmod -R u+w "$STAGE" 2>/dev/null || true
+  assert_safe_to_delete
+  # git makes its object files read-only, and rm would otherwise ask about each.
+  chmod -R u+w "$STAGE" 2> /dev/null || true
+  # --one-file-system as a second net, in case the mount check was wrong.
   rm -rf --one-file-system "$STAGE"
 }
 
-# A shell where `slu` is this build and `~` is the stage. It sources your real
-# ~/.bashrc by absolute path (the redirect hides it) so the prompt in the shot
-# is your own, then clears, because a bashrc that greets you would greet the
-# README too.
+# ---------------------------------------------------------------------------
+# the shell in frame - identical in every crate's rig
+# ---------------------------------------------------------------------------
+# The prompt is invented, and deliberately not the renderer's own. Sourcing a
+# real ~/.bashrc paints a different picture on every machine that regenerates
+# the assets, which defeats the point of keeping the rig in the repo: these
+# images are a build output, and a build output that depends on whose machine
+# ran it is not reproducible. A username is not a leak, but `user@host` is the
+# same for everyone, and it is the same string in all six rigs so the frames
+# match. No tape sets a theme either, so every frame is VHS's default black.
+write_demorc() {
+  cat > "$STAGE/.demorc" <<'EOF'
+PS1='\[\e[38;5;114m\]user@host\[\e[0m\]:\[\e[38;5;110m\]\w\[\e[0m\]\$ '
+unset PROMPT_COMMAND
+HISTFILE=
+clear
+EOF
+}
+
+# A shell where `slu` is this build and `~` is the stage. It opens in the work
+# directory, so the `~/work` on screen is the fixture and never your files.
 open_shell() {
-  mkdir -p "$HERE/bin" "$STAGE/.local"
-  ln -sf "$(cd "$(dirname "$SLU")" && pwd)/slu" "$HERE/bin/slu"
-  # A prompt that shells out to a helper of yours (starship's `custom` modules
-  # do) would find nothing under the staged HOME and quietly render an empty
-  # segment. A symlink to the real ~/.local/bin is enough; `rm` unlinks a
-  # symlink rather than walking into it, so teardown still cannot reach it.
-  [ -d "$HOME/.local/bin" ] && ln -sfn "$HOME/.local/bin" "$STAGE/.local/bin"
-  {
-    echo "[ -f '$HOME/.bashrc' ] && . '$HOME/.bashrc'"
-    echo "clear"
-  } > "$HERE/shellrc"
-  (cd "$WORK" && env $(stage_env) \
-    PATH="$HERE/bin:$PATH" \
-    STARSHIP_CONFIG="$HOME/.config/starship.toml" \
-    bash --noprofile --rcfile "$HERE/shellrc" -i)
+  mkdir -p "$BIN"
+  ln -sf "$(cd "$(dirname "$SLU")" && pwd)/slu" "$BIN/slu"
+  write_demorc
+  (cd "$WORK" && env -i $(stage_env) \
+    bash --noprofile --rcfile "$STAGE/.demorc" -i)
 }
 
 case "${1:-up}" in

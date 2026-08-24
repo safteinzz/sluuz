@@ -6,6 +6,7 @@ Output "../readme-assets/status.gif"
 
 Set Shell bash
 Set FontFamily "JetBrainsMono NF"
+Set Theme "Catppuccin Mocha"
 Set FontSize 14
 Set Width 1400
 Set Height 860

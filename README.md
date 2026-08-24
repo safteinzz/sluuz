@@ -169,18 +169,6 @@ Code's *Keyboard Shortcuts (JSON)*, bind `ctrl+j` and `ctrl+k` with
 `"when": "terminalFocus"` to `workbench.action.terminal.sendSequence`, the
 sequence being the JSON escape backslash-u-001b then `[1;5B` and `[1;5A`.
 
-## The pictures
-
-Every clip and screenshot above is rendered by [VHS](https://github.com/charmbracelet/vhs)
-from the rig in `demo/`, against six invented repositories it builds and throws
-away. It redirects `HOME` and every XDG variable into `demo/home`, so it cannot
-see or touch your repos or your git config.
-
-```bash
-cargo build --release
-cd demo && ./render.sh
-```
-
 ## License
 
 AGPL-3.0-only

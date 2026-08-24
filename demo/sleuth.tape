@@ -16,6 +16,7 @@ Output "../readme-assets/sleuth.gif"
 Set Shell bash
 # The prompt is drawn with nerd-font glyphs; without this they render as boxes.
 Set FontFamily "JetBrainsMono NF"
+Set Theme "Catppuccin Mocha"
 Set FontSize 14
 Set Width 1400
 Set Height 860
