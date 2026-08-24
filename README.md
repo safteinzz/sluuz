@@ -10,9 +10,11 @@ git, but it sleuths - a git superset with cross-repo search, secret scanning, an
 
 ```bash
 cargo install sluuz
+slu self check   # is a newer release out?
+slu self update  # install the latest
 ```
 
-That lands one command: **`slu`**, three letters like `git` itself.
+No cargo yet? Rust installs the same way on every distro: [rustup.rs](https://rustup.rs).
 
 ## It is still git
 
@@ -112,27 +114,6 @@ slu itidy                # the same list, deleted in place
 "Finished" means **upstream gone**, not "merged", so a branch still alive on the
 remote is never suggested for deletion, and the confirm defaults to **No**.
 
-## Keys
-
-`irepos`, `ilog`, `ibranch`, `istatus`, `itidy` and `iscan` share one rule:
-**plain keys drive the top pane, `Ctrl` and the same keys drive the diff.**
-
-| Key | Does |
-| --- | --- |
-| `j` `k` or `↑` `↓` | move in the top pane |
-| `h` `l` or `←` `→` | change scope |
-| `Enter` | open, or drill in one level |
-| `Esc` (or `Ctrl-[`) | step back up |
-| `q` or `Ctrl-C` | quit |
-| `Ctrl-j` `Ctrl-k` or `Ctrl-↑` `Ctrl-↓` | scroll the diff |
-| `Ctrl-d` `Ctrl-u` | scroll the diff half a page |
-| `Ctrl-h` `Ctrl-l` or `Ctrl-←` `Ctrl-→` | pan the diff sideways |
-| `s` `u` `Space` | stage, unstage, toggle (`istatus`) |
-| `/` | edit the query (`iscan`) |
-
-`Enter` on a diff opens your `git difftool` and suspends until you close it, or
-says you have no `diff.tool` set rather than tearing down the screen.
-
 ## Tab completion
 
 Completion reuses git's own, so `slu branch v<Tab>` completes a real branch name
@@ -147,27 +128,21 @@ slu completions fish --add     # ~/.config/fish/config.fish
 Restart your shell afterwards; without `--add` it just prints the script. Works
 in Git Bash and WSL too.
 
-## Everything else
+## Commands
 
 ```bash
 slu sync [path] [--pull]       # fetch and prune every repo, optionally fast-forward
 slu each <git args>            # run any git command in every repo, in parallel
-slu self check                 # is there a newer release?
-slu self update [-y]           # reinstall sluuz from crates.io
 ```
 
 Multi-repo commands take a `path` (default `.`) and `-d, --depth <N>` for how
 deep to look (default 3). Run `slu <command> --help` for the full flag surface
 of any command.
 
-## Troubleshooting
+## Compatibility
 
-**`Ctrl-J` / `Ctrl-K` do nothing in some terminals**, VS Code's integrated one
-among them, because they cannot tell `Ctrl-J` from Enter. slu takes `Ctrl-Down`
-and `Ctrl-Up` for the same actions, so make the terminal send those: in VS
-Code's *Keyboard Shortcuts (JSON)*, bind `ctrl+j` and `ctrl+k` with
-`"when": "terminalFocus"` to `workbench.action.terminal.sendSequence`, the
-sequence being the JSON escape backslash-u-001b then `[1;5B` and `[1;5A`.
+Linux, macOS and Windows. Everything is passed through to your own `git`, so
+anywhere git runs, `slu` runs.
 
 ## License
 
