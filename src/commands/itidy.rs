@@ -16,14 +16,17 @@
 
 use crate::git::{SEP, git_capture, git_run};
 use crate::tui::input::{X_MOVE, Y_MOVE, is_back, is_down, is_left, is_right, is_up, norm_esc};
-use crate::tui::widgets::{list_scrollbar, pane_block, popup_area};
+use crate::tui::widgets::{
+    box_block, box_buttons, box_height, box_hint, box_inner_width, box_width, list_scrollbar,
+    pane_block, popup_area,
+};
 use crate::tui::{pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap};
 use std::io::{self, IsTerminal};
 
 #[derive(clap::Args)]
@@ -194,47 +197,32 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     }
 }
 
-/// Centered confirmation dialog over the list. `yes` = the Yes button (left) is
-/// highlighted; otherwise No (right) is.
+/// The gate in front of deleting a branch: red, and it starts on No, because a
+/// reflex Enter must never be the key that fires an irreversible thing.
 fn confirm_popup(frame: &mut ratatui::Frame, name: &str, yes: bool) {
-    let area = popup_area(
-        frame.area(),
-        frame.area().width.saturating_sub(4).clamp(24, 54),
-        9,
-    );
-    frame.render_widget(Clear, area); // wipe whatever's underneath
-
-    let picked = Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-    let idle = Style::default().fg(Color::DarkGray);
-    let buttons = Line::from(vec![
-        Span::styled("  Yes  ", if yes { picked } else { idle }),
-        Span::raw("     "),
-        Span::styled("  No  ", if yes { idle } else { picked }),
-    ]);
-
-    let body = Paragraph::new(vec![
-        Line::from(""),
+    let full = frame.area();
+    let width = box_width(full.width);
+    let lines = vec![
         Line::from(Span::styled(
-            truncate(name, area.width.saturating_sub(4) as usize),
+            truncate(name, box_inner_width(width)),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        buttons,
+        box_buttons(Color::Red, yes),
         Line::from(""),
-        Line::from(Span::styled(
-            format!("{X_MOVE} toggle · enter select · y/n"),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .alignment(Alignment::Center)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red))
-            .title(" delete this branch? "),
-    );
+        box_hint(&format!("{X_MOVE} move · enter select · y/n")),
+    ];
+    // Measured rather than fixed: a long branch name wraps, and a box that was
+    // always nine rows tall would put the buttons past its own bottom border.
+    let rows = lines.len() as u16;
+    let area = popup_area(full, width, box_height(rows, full.height));
+
+    frame.render_widget(Clear, area); // wipe whatever's underneath
+    let body = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(box_block(Color::Red, "delete this branch?"));
     frame.render_widget(body, area);
 }
 

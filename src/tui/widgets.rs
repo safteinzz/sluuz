@@ -156,38 +156,132 @@ impl Modal {
     /// Draw it centered over whatever the view already rendered.
     pub fn draw(&mut self, frame: &mut Frame) {
         let full = frame.area();
-        let width = full.width.saturating_sub(4).clamp(24, 88);
-        // Sized to the text, capped at four fifths of the screen.
-        let inner_w = width.saturating_sub(4).max(1) as usize;
-        let body_h = wrapped_height(&self.body, inner_w) as u16;
-        let height = body_h
-            .saturating_add(2)
-            .clamp(5, (full.height * 4 / 5).max(5));
-        let area = popup_area(full, width, height);
+        let width = box_width(full.width);
+        // Measured from the wrapped text, never its line count: counting
+        // unwrapped lines is what clips the bottom off a long message.
+        let body_h = wrapped_height(&self.body, box_inner_width(width)) as u16;
+        // The body, a blank, the keys.
+        let area = popup_area(full, width, box_height(body_h + 2, full.height));
 
-        let viewport = area.height.saturating_sub(2);
+        // The viewport is what is left after the borders and the padding row.
+        let viewport = area.height.saturating_sub(BOX_CHROME_H);
         self.scroll = clamp_scroll(self.scroll, body_h as usize, viewport);
 
         frame.render_widget(Clear, area); // wipe whatever's underneath
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red))
-            .padding(Padding::horizontal(1))
-            .title(self.title.clone())
-            .title_bottom(Span::styled(
-                " esc dismiss ",
-                Style::default().fg(Color::DarkGray),
-            ));
-        let body = Paragraph::new(self.body.clone())
-            .block(block)
+        let mut lines: Vec<Line> = self
+            .body
+            .lines()
+            .map(|l| Line::raw(l.to_string()))
+            .collect();
+        lines.push(Line::raw(""));
+        lines.push(box_hint("j/k ↑↓ scroll · esc dismiss"));
+
+        let body = Paragraph::new(lines)
+            .block(box_block(Color::Yellow, &self.title))
             .wrap(Wrap { trim: false })
             .scroll((self.scroll, 0));
         frame.render_widget(body, area);
     }
 }
 
+// ── the house box ───────────────────────────────────────────────────────────
+// Every overlay is built from these, so only its colour and its buttons carry
+// meaning: gate red, alert yellow, offer/picker/form/reader cyan. The anatomy
+// is written down in AGENTS.md under "What every box looks like"; this is that
+// paragraph as code, and nothing should draw a bordered overlay without it.
+
+/// Narrowest a box may be, so a two-word message still reads as a box.
+pub const BOX_MIN_W: u16 = 24;
+/// Widest, so one long line does not stretch a box across a 200-column screen.
+pub const BOX_MAX_W: u16 = 88;
+/// Rows the chrome costs: two borders plus the single top padding row.
+pub const BOX_CHROME_H: u16 = 3;
+/// Columns the chrome costs: two borders plus two columns of padding a side.
+pub const BOX_CHROME_W: u16 = 6;
+
+/// How wide a box is on a screen this wide.
+pub fn box_width(screen_w: u16) -> u16 {
+    screen_w.saturating_sub(4).clamp(BOX_MIN_W, BOX_MAX_W)
+}
+
+/// The columns a body actually gets, which is what it must be wrapped to.
+pub fn box_inner_width(width: u16) -> usize {
+    width.saturating_sub(BOX_CHROME_W).max(1) as usize
+}
+
+/// How tall a box holding `body_rows` *wrapped* rows is, capped at the screen.
+/// Pass the wrapped count, never the line count: measuring the unwrapped text
+/// is what clips a modal's last row off and makes it look unanswerable.
+///
+/// The cap is the whole screen and not some fraction of it. A box is drawn over
+/// a `Clear`, so it owns the screen while it is up anyway, and a fraction only
+/// decides in advance that a long one gets cut off.
+pub fn box_height(body_rows: u16, screen_h: u16) -> u16 {
+    let floor = BOX_CHROME_H + 1;
+    body_rows
+        .saturating_add(BOX_CHROME_H)
+        .clamp(floor, screen_h.max(floor))
+}
+
+/// The bordered block every box wears: a spaced title on the top border, and
+/// otherwise an unbroken frame in the colour that says what kind it is.
+///
+/// Nothing else is written on the border. Keys go in the body, through
+/// `box_hint`: a frame with a sentence along the bottom of it stops reading as
+/// a frame, and the title then has to compete with it.
+pub fn box_block(colour: Color, title: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colour))
+        // One blank row above the content and none below it: the key line is
+        // the last thing in the box, and a blank under it is a wasted row that
+        // makes the frame look loose.
+        .padding(Padding::new(2, 2, 1, 0))
+        .title(format!(" {} ", title.trim()))
+}
+
+/// The line of keys a box ends with, as the last row of its body. Every kind
+/// puts it in the same place, so it is where the eye already is.
+///
+/// Quieter than anything else in the box, deliberately: an unfocused field
+/// label is the default foreground dimmed, so this goes a step below that with
+/// `DarkGray` dimmed again. Separation is the blank row above it and its fixed
+/// place at the bottom, not brightness. Colouring it only made a guideline look
+/// like something worth reading.
+pub fn box_hint(keys: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        keys.to_string(),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    ))
+}
+
+/// The Yes/No row a gate and an offer share. The labels carry their keys, so
+/// the hint line does not have to teach them twice, and the picked one is
+/// filled with the border colour rather than merely reversed: a reversed
+/// button reads as "selected", a filled one reads as "this is what Enter does".
+pub fn box_buttons(colour: Color, yes: bool) -> Line<'static> {
+    let button = |label: &str, picked: bool| {
+        let style = if picked {
+            Style::default()
+                .fg(Color::Black)
+                .bg(colour)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        Span::styled(format!(" {label} "), style)
+    };
+    Line::from(vec![
+        button("Yes (y)", yes),
+        Span::raw("  "),
+        button("No (n)", !yes),
+    ])
+}
+
 /// Rows `text` takes once wrapped to `width` columns.
-fn wrapped_height(text: &str, width: usize) -> usize {
+pub fn wrapped_height(text: &str, width: usize) -> usize {
     text.lines()
         .map(|l| l.chars().count().div_ceil(width).max(1))
         .sum()
