@@ -20,6 +20,7 @@ pub use branches::Branch;
 use crate::git::RepoStatus;
 use crate::git::load::{Commit, FileEntry};
 use crate::tui::highlight::RenderedDiff;
+use crate::tui::widgets::Modal;
 use crate::tui::{pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -142,6 +143,9 @@ pub struct App {
     width: u16,
     /// Transient status line (a difftool complaint, mostly).
     msg: Option<String>,
+    /// A message that has to be read before anything else happens: it owns
+    /// every key until it is dismissed.
+    modal: Option<Modal>,
 
     // ── repos level ─────────────────────────────────────────────────────────
     repos: Vec<RepoStatus>,
@@ -189,6 +193,7 @@ impl App {
             enhanced: false,
             width: 120,
             msg: None,
+            modal: None,
             repos: Vec::new(),
             rsel: Sel::scoped(repos::DEFAULT_SCOPE),
             repo,

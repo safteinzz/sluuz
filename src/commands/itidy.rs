@@ -16,11 +16,11 @@
 
 use crate::git::{SEP, git_capture, git_run};
 use crate::tui::input::{X_MOVE, Y_MOVE, is_back, is_down, is_left, is_right, is_up, norm_esc};
-use crate::tui::widgets::{list_scrollbar, pane_block};
+use crate::tui::widgets::{list_scrollbar, pane_block, popup_area};
 use crate::tui::{pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
@@ -197,7 +197,11 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 /// Centered confirmation dialog over the list. `yes` = the Yes button (left) is
 /// highlighted; otherwise No (right) is.
 fn confirm_popup(frame: &mut ratatui::Frame, name: &str, yes: bool) {
-    let area = popup_area(frame.area());
+    let area = popup_area(
+        frame.area(),
+        frame.area().width.saturating_sub(4).clamp(24, 54),
+        9,
+    );
     frame.render_widget(Clear, area); // wipe whatever's underneath
 
     let picked = Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -232,18 +236,6 @@ fn confirm_popup(frame: &mut ratatui::Frame, name: &str, yes: bool) {
             .title(" delete this branch? "),
     );
     frame.render_widget(body, area);
-}
-
-/// A small box centered in `area`.
-fn popup_area(area: Rect) -> Rect {
-    let w = area.width.saturating_sub(4).clamp(24, 54);
-    let h = 9u16.min(area.height);
-    Rect {
-        x: area.x + (area.width.saturating_sub(w)) / 2,
-        y: area.y + (area.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
-    }
 }
 
 /// Bottom line: the last action's result if any, otherwise the key hints.

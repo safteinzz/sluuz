@@ -13,9 +13,21 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTerminal) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let code = norm_esc(key.code, ctrl);
-    app.msg = None; // any keypress clears a stale status message
 
-    if code == KeyCode::Char('q') || (ctrl && code == KeyCode::Char('c')) {
+    // Ctrl-C quits from anywhere, even out from under a modal.
+    if ctrl && code == KeyCode::Char('c') {
+        return true;
+    }
+    // A modal owns every key until it is dismissed.
+    if let Some(modal) = &mut app.modal {
+        if modal.on_key(code) {
+            app.modal = None;
+        }
+        return false;
+    }
+
+    app.msg = None; // any keypress clears a stale status message
+    if code == KeyCode::Char('q') {
         return true;
     }
 

@@ -5,7 +5,7 @@
 
 use super::{App, Level};
 use crate::git::load::load_diff_raw;
-use crate::tui::difftool::difftool_commit;
+use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{prepare_diff, render_prepared};
 use crate::tui::{clamp_hscroll, clamp_scroll, half_page, pane_height};
 use ratatui::DefaultTerminal;
@@ -78,10 +78,12 @@ impl App {
             return;
         };
         let (hash, path) = (hash.to_string(), path.to_string());
-        let m = difftool_commit(terminal, self.enhanced, &self.repo, &hash, &path);
+        let outcome = difftool_commit(terminal, self.enhanced, &self.repo, &hash, &path);
         self.width = crate::tui::pane_width(terminal);
-        if !m.is_empty() {
-            self.msg = Some(m);
+        match outcome {
+            DiffTool::Quiet => {}
+            DiffTool::Note(m) => self.msg = Some(m),
+            DiffTool::Failed(modal) => self.modal = Some(modal),
         }
     }
 }

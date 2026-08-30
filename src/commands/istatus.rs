@@ -10,12 +10,12 @@
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
 use crate::git::{git_capture, git_capture_raw, git_run};
-use crate::tui::difftool::run_difftool;
+use crate::tui::difftool::{DiffTool, run_difftool};
 use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
 use crate::tui::input::{
     CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
 };
-use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
+use crate::tui::widgets::{Modal, diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use crate::tui::{
     clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
     push_keyboard_enhancement,
@@ -100,6 +100,9 @@ struct App {
     state: ListState,
     /// Transient status line (a difftool result, mostly).
     msg: Option<String>,
+    /// A message that has to be read before anything else happens: it owns
+    /// every key until it is dismissed.
+    modal: Option<Modal>,
     prepared: RenderedDiff,
     diff: Text<'static>,
     diff_scroll: u16,
@@ -132,6 +135,7 @@ pub fn run(_args: Args) {
         scope_idx: 1, // default: All
         state: ListState::default(),
         msg: None,
+        modal: None,
         prepared: RenderedDiff::default(),
         diff: Text::default(),
         diff_scroll: 0,
@@ -244,10 +248,12 @@ impl App {
         let args: &[&str] = if cached { &["--cached", "--"] } else { &["--"] };
         let mut argv = args.to_vec();
         argv.push(&path);
-        let dt = run_difftool(terminal, self.enhanced, &self.root, &argv);
+        let outcome = run_difftool(terminal, self.enhanced, &self.root, &argv);
         self.width = pane_width(terminal);
-        if !dt.is_empty() {
-            self.msg = Some(dt);
+        match outcome {
+            DiffTool::Quiet => {}
+            DiffTool::Note(m) => self.msg = Some(m),
+            DiffTool::Failed(modal) => self.modal = Some(modal),
         }
         true // a difftool edit may have changed the file
     }
@@ -267,11 +273,21 @@ impl App {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                     let code = norm_esc(key.code, ctrl);
-                    self.msg = None; // any keypress clears a stale status message
 
-                    if matches!(code, KeyCode::Char('q') | KeyCode::Esc)
-                        || (ctrl && code == KeyCode::Char('c'))
-                    {
+                    // Ctrl-C quits from anywhere, even out from under a modal.
+                    if ctrl && code == KeyCode::Char('c') {
+                        break;
+                    }
+                    // A modal owns every key until it is dismissed.
+                    if let Some(modal) = &mut self.modal {
+                        if modal.on_key(code) {
+                            self.modal = None;
+                        }
+                        continue;
+                    }
+
+                    self.msg = None; // any keypress clears a stale status message
+                    if matches!(code, KeyCode::Char('q') | KeyCode::Esc) {
                         break;
                     }
                     self.on_key(code, ctrl, terminal);
@@ -456,6 +472,10 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         cell,
         app.diff_hscroll,
     );
+
+    if let Some(modal) = &mut app.modal {
+        modal.draw(frame);
+    }
 }
 
 /// Which side of the diff the bottom pane is showing.

@@ -77,6 +77,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             diff(frame, bottom, app);
         }
     }
+
+    if let Some(modal) = &mut app.modal {
+        modal.draw(frame);
+    }
 }
 
 /// Render one list pane with its scrollbar.

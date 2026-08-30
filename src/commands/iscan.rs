@@ -17,13 +17,13 @@
 use crate::git::load::load_diff_raw;
 use crate::git::{display_name, find_repos};
 use crate::history::{self, CommitMatch};
-use crate::tui::difftool::difftool_commit;
+use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
 use crate::tui::input::{
     CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_back, is_down, is_left, is_open, is_right, is_up,
     norm_esc,
 };
-use crate::tui::widgets::{diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
+use crate::tui::widgets::{Modal, diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use crate::tui::{
     clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
     push_keyboard_enhancement,
@@ -119,6 +119,9 @@ struct App {
     diff_scroll: u16,
     diff_hscroll: u16,
     msg: Option<String>,
+    /// A message that has to be read before anything else happens: it owns
+    /// every key until it is dismissed.
+    modal: Option<Modal>,
 }
 
 pub fn run(args: Args) {
@@ -148,6 +151,7 @@ pub fn run(args: Args) {
         diff_scroll: 0,
         diff_hscroll: 0,
         msg: None,
+        modal: None,
     };
 
     let mut terminal = ratatui::init();
@@ -189,11 +193,19 @@ impl App {
             }
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             let code = norm_esc(key.code, ctrl);
-            self.msg = None;
 
+            // Ctrl-C quits from anywhere, even out from under a modal.
             if ctrl && code == KeyCode::Char('c') {
                 break;
             }
+            // A modal owns every key until it is dismissed.
+            if let Some(modal) = &mut self.modal {
+                if modal.on_key(code) {
+                    self.modal = None;
+                }
+                continue;
+            }
+            self.msg = None;
 
             let quit = if self.mode == Mode::Editing {
                 self.edit_key(code, ctrl)
@@ -345,10 +357,12 @@ impl App {
             && let Some(h) = self.visible.get(self.sel).map(|&i| &self.hits[i])
         {
             let (repo, full, file) = (h.repo_path.clone(), h.full.clone(), h.file.clone());
-            let m = difftool_commit(terminal, self.enhanced, &repo, &full, &file);
+            let outcome = difftool_commit(terminal, self.enhanced, &repo, &full, &file);
             self.width = pane_width(terminal);
-            if !m.is_empty() {
-                self.msg = Some(m);
+            match outcome {
+                DiffTool::Quiet => {}
+                DiffTool::Note(m) => self.msg = Some(m),
+                DiffTool::Failed(modal) => self.modal = Some(modal),
             }
         }
 
@@ -527,6 +541,10 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         cell,
         app.diff_hscroll,
     );
+
+    if let Some(modal) = &mut app.modal {
+        modal.draw(frame);
+    }
 }
 
 fn hit_item(h: &Hit) -> ListItem<'static> {

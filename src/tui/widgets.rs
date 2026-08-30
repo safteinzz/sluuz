@@ -1,11 +1,18 @@
-//! Row renderers and pane furniture shared by every view.
+//! Row renderers, pane furniture and the modal box: what every view draws
+//! with, none of it knowing which view is drawing.
 
 use crate::git::load::{Commit, FileEntry};
+use crate::tui::clamp_scroll;
+use crate::tui::input::{is_back, is_down, is_up};
 use ratatui::Frame;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, ListItem, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{
+    Block, Borders, Clear, ListItem, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 
 /// Render a commit row. `unpushed` prepends a yellow `↑` marker (this commit is
 /// on no remote yet); pushed commits get an aligning blank so columns line up.
@@ -104,4 +111,95 @@ pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u
         .end_symbol(None)
         .thumb_symbol("■");
     frame.render_stateful_widget(bar, area.inner(Margin::new(1, 0)), &mut state);
+}
+
+// ── modal ───────────────────────────────────────────────────────────────────
+
+/// A box over the whole screen with something the user has to read: a title, a
+/// body, and no way past it but dismissing it.
+///
+/// It exists because the alternative is a line in a pane title, which is where
+/// a failed `git difftool` used to be reported and where nobody looked: the
+/// screen came back unchanged and the run looked like a no-op. A view holds an
+/// `Option<Modal>` and hands it the keys first, the way `itidy` gates on its
+/// confirm popup.
+pub struct Modal {
+    title: String,
+    body: String,
+    scroll: u16,
+}
+
+impl Modal {
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Modal {
+        Modal {
+            title: title.into(),
+            body: body.into(),
+            scroll: 0,
+        }
+    }
+
+    /// Handle one key while the modal is up. Returns true when it was
+    /// dismissed, so the caller drops it. Movement keys scroll a body too long
+    /// for the box; anything else is swallowed, so a stray keypress can't
+    /// close a message before it is read.
+    pub fn on_key(&mut self, code: KeyCode) -> bool {
+        if is_down(code) || code == KeyCode::PageDown {
+            self.scroll = self.scroll.saturating_add(1);
+        } else if is_up(code) || code == KeyCode::PageUp {
+            self.scroll = self.scroll.saturating_sub(1);
+        } else if is_back(code) || matches!(code, KeyCode::Enter | KeyCode::Char('q' | ' ')) {
+            return true;
+        }
+        false
+    }
+
+    /// Draw it centered over whatever the view already rendered.
+    pub fn draw(&mut self, frame: &mut Frame) {
+        let full = frame.area();
+        let width = full.width.saturating_sub(4).clamp(24, 88);
+        // Sized to the text, capped at four fifths of the screen.
+        let inner_w = width.saturating_sub(4).max(1) as usize;
+        let body_h = wrapped_height(&self.body, inner_w) as u16;
+        let height = body_h
+            .saturating_add(2)
+            .clamp(5, (full.height * 4 / 5).max(5));
+        let area = popup_area(full, width, height);
+
+        let viewport = area.height.saturating_sub(2);
+        self.scroll = clamp_scroll(self.scroll, body_h as usize, viewport);
+
+        frame.render_widget(Clear, area); // wipe whatever's underneath
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red))
+            .padding(Padding::horizontal(1))
+            .title(self.title.clone())
+            .title_bottom(Span::styled(
+                " esc dismiss ",
+                Style::default().fg(Color::DarkGray),
+            ));
+        let body = Paragraph::new(self.body.clone())
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((self.scroll, 0));
+        frame.render_widget(body, area);
+    }
+}
+
+/// Rows `text` takes once wrapped to `width` columns.
+fn wrapped_height(text: &str, width: usize) -> usize {
+    text.lines()
+        .map(|l| l.chars().count().div_ceil(width).max(1))
+        .sum()
+}
+
+/// A box of at most `w`×`h`, centered in `area`.
+pub fn popup_area(area: Rect, w: u16, h: u16) -> Rect {
+    let (w, h) = (w.min(area.width), h.min(area.height));
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    }
 }
