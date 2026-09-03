@@ -694,8 +694,107 @@ pub fn repo_scope(dirty: bool) -> usize {
 mod tests {
     use super::branches::{Branch, Scope as BranchScope};
     use super::repos::Scope as RepoScope;
-    use super::{Level, Query, Sel};
-    use crate::git::RepoStatus;
+    use super::{App, Level, Query, Sel};
+    use crate::git::{RepoStatus, git_capture};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A throwaway repo with a real remote of its own, deleted when it goes out
+    /// of scope - including when an assertion panics, so a failing test leaves
+    /// the machine as it found it. Everything lives under the system temp dir.
+    struct Stage {
+        dir: PathBuf,
+    }
+
+    impl Stage {
+        /// A repo whose only commit is pushed, so nothing is unpushed yet.
+        fn new() -> Stage {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!("sluuz-refresh-{stamp}"));
+            fs::create_dir_all(dir.join("work")).expect("temp dir");
+            let stage = Stage { dir };
+            let (work, remote) = (stage.work(), stage.remote());
+            git_capture(".", &["init", "-q", "--bare", &remote]).expect("bare remote");
+            git_capture(".", &["init", "-q", &work]).expect("work tree");
+            stage.git(&["remote", "add", "origin", &remote]);
+            stage.commit("base");
+            stage.git(&["push", "-q", "-u", "origin", "HEAD"]);
+            stage
+        }
+
+        fn work(&self) -> String {
+            self.dir
+                .join("work")
+                .to_str()
+                .expect("utf-8 temp path")
+                .to_string()
+        }
+
+        fn remote(&self) -> String {
+            self.dir
+                .join("remote.git")
+                .to_str()
+                .expect("utf-8 temp path")
+                .to_string()
+        }
+
+        fn git(&self, args: &[&str]) {
+            git_capture(&self.work(), args).unwrap_or_else(|| panic!("git {args:?}"));
+        }
+
+        fn commit(&self, msg: &str) {
+            self.git(&[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                msg,
+            ]);
+        }
+
+        /// The hash of whatever HEAD is on now.
+        fn head(&self) -> String {
+            git_capture(&self.work(), &["rev-parse", "HEAD"]).expect("rev-parse")
+        }
+    }
+
+    impl Drop for Stage {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn a_refreshed_log_sees_a_commit_made_after_it_opened_as_unpushed() {
+        // `r` exists for exactly this: another terminal commits while this view
+        // is open. The push-state set is read once per repo and cached, so a
+        // refresh that reloads the log without reloading that set reports the
+        // new commit as already pushed, and it arrives without its `↑`.
+        let stage = Stage::new();
+        let app = App::at_commits(stage.work(), Vec::new(), 200, Vec::new());
+        let mut app = app.expect("the repo has a commit, so the view opens");
+        assert!(
+            app.unpushed.is_empty(),
+            "everything was pushed when the view opened"
+        );
+
+        stage.commit("made while the view was open");
+        let fresh = stage.head();
+
+        app.refresh();
+        assert!(
+            app.unpushed.contains(&fresh),
+            "a refresh has to read the push state again, not trust the cached one"
+        );
+    }
 
     fn repo(dirty: usize, ahead: usize) -> RepoStatus {
         RepoStatus {
