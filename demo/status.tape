@@ -8,8 +8,8 @@ Set Shell bash
 Set FontFamily "JetBrainsMono NF"
 Set Theme "Catppuccin Mocha"
 Set FontSize 14
-Set Width 1400
-Set Height 860
+Set Width 960
+Set Height 600
 Set Padding 20
 Set Framerate 20
 Set TypingSpeed 55ms
