@@ -41,7 +41,7 @@ slu irepos               # the same list, with a way in
 slu irepos ~/projects    # or under somewhere else
 ```
 
-![slu repos listing six repositories with their branch and state, then the same list filtered to the dirty ones, then slu irepos drilling from that list into a repository's branches, its commits and one commit's diff, and walking back out with Esc](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos.gif)
+![slu repos listing six repositories with their branch and state, then the same list filtered to the dirty ones, then slu irepos using the filter to navigate instead of the arrow keys - / proxy narrowing six repositories to edge-proxy, / feat narrowing its branches to two, ? Marek narrowing the commits under those to that author's four - then ctrl-down picking one of them and drilling into its diff, before walking back out with Esc](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos.gif)
 
 One app, three doors: `slu ibranch` opens it at the branches level and
 `slu ilog` at the commits level of the repo you are standing in.
@@ -119,7 +119,7 @@ slu tidy -p              # the same, after dropping remote branches that are gon
 slu itidy                # the same list, deleted in place (`p` prunes and reloads)
 ```
 
-![slu ibranch listing eight branches with their push state and sliding between local, all and remote scope, then slu tidy reporting the finished branches across every repo, then slu itidy deleting one through a confirmation dialog that opens on No](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
+![slu ibranch listing eight branches with their push state, sliding between local, all and remote scope, then narrowing the branch list to the two fix branches by typing / fix and the commits under it to the two health ones with ? health, then slu tidy reporting the finished branches across every repo, then slu itidy deleting one through a confirmation dialog that opens on No](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
 
 "Finished" means **upstream gone**, not "merged", so a branch still alive on the
 remote is never suggested for deletion, and the confirm defaults to **No**.

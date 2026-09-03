@@ -202,28 +202,42 @@ fn help_template(cmd: &clap::Command) -> String {
     let (tui, plain): (Vec<&&clap::Command>, Vec<&&clap::Command>) =
         subs.iter().partition(|c| is_interactive(c));
 
+    // Rendering the list by hand means also painting it by hand: clap only
+    // styles what it renders itself, and every other crate's help has bold
+    // headings and bold command names. The styles come from clap so this list
+    // is painted with the same palette as the `{options}` block below it.
+    let styles = cmd.get_styles();
+    let header = styles.get_header();
+    let literal = styles.get_literal();
+
     let mut list = String::new();
     for (heading, group) in [("Commands:", plain), ("Interactive (TUI):", tui)] {
-        list.push_str(heading);
-        list.push('\n');
+        list.push_str(&format!("{header}{heading}{header:#}\n"));
         for c in group {
-            list.push_str(&entry(c, width));
+            list.push_str(&entry(c, width, literal));
         }
         list.push('\n');
     }
 
     format!(
-        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{list}Options:\n{{options}}{{after-help}}\n"
+        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{list}{header}Options:{header:#}\n{{options}}{{after-help}}\n"
     )
 }
 
 /// One command's row: its name, then its description, whose extra lines are
 /// indented to the same column so a multi-line one still reads as one entry.
-fn entry(cmd: &clap::Command, width: usize) -> String {
+fn entry(cmd: &clap::Command, width: usize, literal: &clap::builder::styling::Style) -> String {
     let about = cmd.get_about().map(ToString::to_string).unwrap_or_default();
     let mut lines = about.lines();
     let name = cmd.get_name();
-    let mut row = format!("  {name:<width$}  {}\n", lines.next().unwrap_or(""));
+    // The name is padded outside its own styling: escape codes are zero-width
+    // to a reader and full-width to `{:<width$}`, so styling the padded string
+    // would push every description off the column.
+    let pad = " ".repeat(width - name.chars().count());
+    let mut row = format!(
+        "  {literal}{name}{literal:#}{pad}  {}\n",
+        lines.next().unwrap_or("")
+    );
     for line in lines {
         row.push_str(&format!("  {:<width$}  {line}\n", ""));
     }
@@ -268,9 +282,12 @@ mod tests {
             .split_once("Interactive (TUI):")
             .expect("the list is split into two groups");
 
+        let literal = built.get_styles().get_literal();
         for sub in built.get_subcommands() {
             let name = sub.get_name();
-            let row = format!("\n  {name} ");
+            // The name carries its own styling, so anchoring on it also pins
+            // that the hand-rendered list is painted like clap's own.
+            let row = format!("\n  {literal}{name}{literal:#}");
             let (half, group) = if name.starts_with('i') {
                 (interactive, "interactive")
             } else {
