@@ -6,7 +6,8 @@
 //! *not* list branches still alive on the remote (like a reserved `v0.2.21`) or
 //! ones that never had an upstream.
 //!
-//! `p` prunes and reloads: git only marks a branch `[gone]` once the
+//! `r` reads the list again, for when another terminal has changed it since
+//! this one opened. `p` prunes and reloads: git only marks a branch `[gone]` once the
 //! remote-tracking ref is really absent, and a plain `git fetch` never removes
 //! one, so a repo that does not prune hides the very branches this lists.
 //!
@@ -204,8 +205,25 @@ impl App {
         } else if code == KeyCode::Char('p') {
             self.pruning = true;
             self.note(true, "pruning…".to_string());
+        } else if code == KeyCode::Char('r') {
+            self.reload();
         }
         false
+    }
+
+    /// Read the list again. Another terminal may have deleted or merged a
+    /// branch since this one opened, and quitting to find out is not an answer.
+    /// The cursor is kept on the branch it was on by name, since a reload is
+    /// exactly when the list underneath may have shifted.
+    fn reload(&mut self) {
+        let keep = self.branches.get(self.sel).map(|b| b.name.clone());
+        self.branches = load_gone();
+        self.sel = keep
+            .and_then(|name| self.branches.iter().position(|b| b.name == name))
+            .unwrap_or(0);
+        self.state
+            .select((!self.branches.is_empty()).then_some(self.sel));
+        self.note(true, "reloaded".to_string());
     }
 
     /// Drop the remote-tracking refs the remote no longer has and read the list
@@ -329,7 +347,7 @@ fn footer(msg: &Option<(bool, String)>) -> Paragraph<'static> {
             Style::default().fg(Color::Red),
         )),
         None => Line::from(Span::styled(
-            format!(" {Y_MOVE} move · enter delete · p prune · q quit"),
+            format!(" {Y_MOVE} move · enter delete · r refresh · p prune · q quit"),
             Style::default().fg(Color::DarkGray),
         )),
     };

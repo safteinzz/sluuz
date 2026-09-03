@@ -52,8 +52,11 @@ and `PageUp`/`PageDown` page the top pane, `Ctrl-j`/`Ctrl-k` move the preview an
 `Esc` steps back out. `/` filters the top pane and `?` the one below it: terms
 are separated by spaces and all of them have to appear somewhere in a row, so
 `pablo fix` finds what both words are in, whether that is a sha, an author, a
-date or a subject. Lists load in the background and keep filtering as they
-arrive, so nothing you press ever waits on git.
+date or a subject. `r` reads the level again, for when another terminal has
+committed something since you opened this one - the cursor stays on the branch
+or commit it was on, by name rather than by position. Lists load in the
+background and keep filtering as they arrive, so nothing you press ever waits on
+git.
 
 ## Find a leaked string in every repo's history
 
@@ -116,7 +119,7 @@ was deleted · `synced` in step
 slu ibranch [-a]         # push state of every branch, local or local + remote
 slu tidy [path] [-a]     # finished branches across every repo, with a delete command to paste
 slu tidy -p              # the same, after dropping remote branches that are gone
-slu itidy                # the same list, deleted in place (`p` prunes and reloads)
+slu itidy                # the same list, deleted in place (`r` reloads, `p` prunes)
 ```
 
 ![slu ibranch listing eight branches with their push state, sliding between local, all and remote scope, then narrowing the branch list to the two fix branches by typing / fix and the commits under it to the two health ones with ? health, then slu tidy reporting the finished branches across every repo, then slu itidy deleting one through a confirmation dialog that opens on No](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)

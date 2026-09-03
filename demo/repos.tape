@@ -43,29 +43,47 @@ Sleep 300ms
 Type "slu irepos"
 Enter
 Sleep 1.5s
-Down 3
-Sleep 1.5s
+# `/` narrows the list the plain keys drive and `?` the pane below it, at every
+# level: the repos, then that repo's branches, then the commits under those. The
+# filter is how you get where you are going, so it replaces the arrow keys here.
+Type "/"
+Sleep 300ms
+Type "proxy"
+Sleep 1.2s
+Enter
+Sleep 500ms
 # repos → branches
 Enter
-Sleep 1.8s
-Down 4
+Sleep 1.5s
+Type "/"
+Sleep 300ms
+Type "feat"
+Sleep 1.2s
+Enter
+Sleep 400ms
+Type "?"
+Sleep 300ms
+Type "Marek"
 Sleep 1.4s
+Enter
+Sleep 400ms
+# ctrl drives the pane below, so ctrl-↓ picks one of what the filter left
+Ctrl+Down
+Sleep 1s
 # branches → commits
 Enter
-Sleep 1.8s
-Down 2
-Sleep 1.4s
+Sleep 1.5s
 # commits → the diff, three enters below a list of repositories
 Enter
 Sleep 1.8s
 Ctrl+D
-Sleep 2.5s
+Sleep 2s
 # and esc walks back up the way it came down
 Escape
-Sleep 900ms
+Sleep 800ms
+Escape
+Sleep 800ms
 Escape
 Sleep 900ms
-Escape
-Sleep 1.2s
 Type "q"
-Sleep 3s
+Sleep 2s

@@ -101,6 +101,15 @@ impl App {
             })
             .collect();
         self.csel.append(more);
+        if let Some(want) = self.csel.restore.clone()
+            && let Some(at) = self
+                .csel
+                .visible
+                .iter()
+                .position(|&i| self.commits[i].hash == want)
+        {
+            self.csel.restored_at(at);
+        }
     }
 
     pub(super) fn rescope_commits(&mut self) {

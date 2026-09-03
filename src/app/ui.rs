@@ -27,7 +27,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
     let (top, bottom) = (areas[0], areas[1]);
 
-    let move_hint = format!("{Y_MOVE} · {X_MOVE} scope · / filter");
+    let move_hint = format!("{Y_MOVE} · {X_MOVE} scope · / filter · r refresh");
     let pick_hint = format!("{CTRL_Y_MOVE} select · enter open · ? filter");
     // Which of the two panes a typed filter is going into. Only one at a time,
     // and it is the pane's own title that shows it, so `/` and `?` can never be

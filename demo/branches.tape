@@ -37,6 +37,20 @@ Sleep 1.8s
 Type "h"
 Type "h"
 Sleep 1.5s
+# `/` narrows the list the plain keys drive, `?` the commits under it, and both
+# say on their own title which key opened them
+Type "/"
+Sleep 500ms
+Type "fix"
+Sleep 1.8s
+Escape
+Sleep 500ms
+Type "?"
+Sleep 500ms
+Type "health"
+Sleep 1.8s
+Escape
+Sleep 600ms
 Type "q"
 Sleep 800ms
 
@@ -61,6 +75,6 @@ Sleep 1.5s
 Left
 Sleep 1.2s
 Enter
-Sleep 3s
+Sleep 2s
 Type "q"
-Sleep 3s
+Sleep 1.5s

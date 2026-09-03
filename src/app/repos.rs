@@ -84,6 +84,15 @@ impl App {
             .filter(|&i| scope.keeps(&self.repos[i]) && query.keeps(&haystack(&self.repos[i])))
             .collect();
         self.rsel.show(visible);
+        if let Some(want) = self.rsel.restore.clone()
+            && let Some(at) = self
+                .rsel
+                .visible
+                .iter()
+                .position(|&i| self.repos[i].path == want)
+        {
+            self.rsel.restored_at(at);
+        }
     }
 
     /// Point the app at the selected repo and load its branches, which are what

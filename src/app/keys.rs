@@ -48,6 +48,13 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
         return false;
     }
 
+    // `r` reads this level again: another terminal may have committed since it
+    // was loaded, and quitting to see that is not an answer.
+    if code == KeyCode::Char('r') {
+        app.refresh();
+        return false;
+    }
+
     // Only another move of the top pane can safely leave a load pending:
     // anything else acts on the pane that load fills, so it has to finish first.
     let moving = !ctrl

@@ -29,7 +29,7 @@ use ratatui::text::Text;
 use ratatui::widgets::ListState;
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -126,6 +126,11 @@ pub struct Sel {
     pub state: ListState,
     /// Index into the level's scope slider, moved with h/l.
     pub scope: usize,
+    /// What the cursor was on when `r` was pressed, named rather than numbered:
+    /// a refresh exists because the list may have changed underneath, so the
+    /// row that was selected can come back at a different position, or not at
+    /// all - in which case the cursor simply stays at the top.
+    pub restore: Option<String>,
     /// What `/` (or `?` on the pane below) narrowed this list to.
     pub query: Query,
 }
@@ -178,6 +183,14 @@ impl Sel {
             self.state.select(Some(self.cur));
         }
         moved
+    }
+
+    /// Put the cursor on the row a refresh was standing on, now that it has
+    /// turned up among the rows that arrived.
+    fn restored_at(&mut self, at: usize) {
+        self.cur = at;
+        self.state.select(Some(at));
+        self.restore = None;
     }
 
     /// Add entries a background load produced. The cursor stays where the user
@@ -315,6 +328,9 @@ pub struct App {
     /// The repo every git call runs against. `"."` when the app was entered
     /// inside one repo rather than over a tree of them.
     repo: String,
+    /// What `slu irepos` was pointed at, kept so `r` can scan it again.
+    base: PathBuf,
+    depth: usize,
 
     // ── branches level ──────────────────────────────────────────────────────
     branches: Vec<Branch>,
@@ -369,6 +385,8 @@ impl App {
             repos: Vec::new(),
             rsel: Sel::scoped(repos::DEFAULT_SCOPE),
             repo,
+            base: PathBuf::from("."),
+            depth: 0,
             branches: Vec::new(),
             bsel: Sel::scoped(branches::DEFAULT_SCOPE),
             bfeed: Feed::default(),
@@ -396,6 +414,8 @@ impl App {
     pub fn at_repos(base: &Path, depth: usize, scope: usize) -> Option<App> {
         let mut app = App::new(Level::Repos, ".".to_string());
         app.rsel.scope = scope;
+        app.base = base.to_path_buf();
+        app.depth = depth;
         app.load_repos(base, depth);
         if app.repos.is_empty() {
             return None;
@@ -600,6 +620,40 @@ impl App {
         // rows are being filtered.
         if pane == Pane::Top {
             self.pending = true;
+        }
+    }
+
+    /// `r`: read this level again from git. It is the answer to a second
+    /// terminal having committed something while this one was open - without it
+    /// the only way to see the new commit is to quit and start over.
+    ///
+    /// The push-state set is dropped with it: that is cached once per repo, so
+    /// a commit made a moment ago would otherwise arrive wearing the wrong mark.
+    fn refresh(&mut self) {
+        self.unpushed_for.clear();
+        self.files_for.clear();
+        match self.level {
+            Level::Repos => {
+                let keep = self.rsel.idx().map(|i| self.repos[i].path.clone());
+                let (base, depth) = (self.base.clone(), self.depth);
+                self.load_repos(&base, depth);
+                self.rsel.restore = keep;
+                self.rescope_repos();
+                self.pending = true;
+            }
+            Level::Branches => {
+                self.bsel.restore = self.bsel.idx().map(|i| self.branches[i].name.clone());
+                self.request_branches();
+                self.pending = true;
+            }
+            Level::Commits => {
+                self.csel.restore = self.commit_hash().map(str::to_string);
+                self.request_commits();
+                self.pending = true;
+            }
+            // The diff is one file of one commit, so there is nothing to look up
+            // again except that file.
+            Level::Diff => self.open_diff(),
         }
     }
 

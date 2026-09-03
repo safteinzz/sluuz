@@ -92,6 +92,10 @@ impl App {
     /// scope and the filter, so rows that arrive during a search are held to
     /// the same test as the ones already there.
     pub(super) fn extend_branches(&mut self, from: usize) {
+        // Rows arriving can put a different branch under the cursor - the first
+        // batch after a refresh always does, since the list was empty a moment
+        // ago - and the commits pane has to follow it.
+        let before = self.bsel.idx();
         let scope = SCOPES[self.bsel.scope];
         let query = &self.bsel.query;
         let more: Vec<usize> = (from..self.branches.len())
@@ -100,6 +104,21 @@ impl App {
             })
             .collect();
         self.bsel.append(more);
+        if let Some(want) = self.bsel.restore.clone()
+            && let Some(at) = self
+                .bsel
+                .visible
+                .iter()
+                .position(|&i| self.branches[i].name == want)
+        {
+            self.bsel.restored_at(at);
+        }
+        // Only when this level's plain keys drive the branch list: at the repos
+        // level it is the preview pane, and marking the pane below it stale
+        // re-runs the repo's own load, which requests these branches again.
+        if self.level == super::Level::Branches {
+            self.pending |= self.bsel.idx() != before;
+        }
     }
 
     pub(super) fn rescope_branches(&mut self) {
