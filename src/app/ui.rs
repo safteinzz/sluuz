@@ -169,7 +169,7 @@ fn diff(frame: &mut Frame, area: Rect, app: &App) {
     let title = match &app.msg {
         Some(m) => format!(" {path}   ⚠ {m} "),
         None => format!(
-            " {path}   enter difftool · {CTRL_Y_MOVE}·ctrl-d/u scroll · {CTRL_X_MOVE} pan · esc back · q quit "
+            " {path}   enter difftool · {CTRL_Y_MOVE}·ctrl-d/u scroll · {CTRL_X_MOVE} pan · esc back "
         ),
     };
     let view = Paragraph::new(app.diff.clone())
