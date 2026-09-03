@@ -6,6 +6,10 @@
 //! *not* list branches still alive on the remote (like a reserved `v0.2.21`) or
 //! ones that never had an upstream.
 //!
+//! `p` prunes and reloads: git only marks a branch `[gone]` once the
+//! remote-tracking ref is really absent, and a plain `git fetch` never removes
+//! one, so a repo that does not prune hides the very branches this lists.
+//!
 //! `j`/`k` (or arrows) move; `Enter` opens a Yes/No confirm popup (default
 //! **No**), where `←`/`→` (or `h`/`l`) toggle and `Enter` acts on the highlight:
 //! Yes deletes (`git branch -D`, force, since these are done on the remote and
@@ -14,7 +18,7 @@
 //!
 //! For the non-interactive, multi-repo view, use `slu tidy`.
 
-use crate::git::{SEP, git_capture, git_run};
+use crate::git::{SEP, first_line, git_capture, git_run, prunes_on_fetch};
 use crate::tui::input::{X_MOVE, Y_MOVE, is_back, is_down, is_left, is_right, is_up, norm_esc};
 use crate::tui::widgets::{
     box_block, box_buttons, box_height, box_hint, box_inner_width, box_width, list_scrollbar,
@@ -28,6 +32,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap};
 use std::io::{self, IsTerminal};
+use std::time::{Duration, Instant};
+
+/// How long a success note sits in the footer before the key hints come back.
+/// A failure is not given one: it stays until a keypress, because it is the
+/// only place git's own words are shown.
+const NOTE: Duration = Duration::from_secs(4);
 
 #[derive(clap::Args)]
 pub struct Args {}
@@ -48,8 +58,19 @@ struct App {
     /// The delete-confirmation popup: None when closed, Some(yes) when open,
     /// where `yes` is whether the Yes button (left) is highlighted.
     confirm: Option<bool>,
-    /// Last action's outcome, shown in the footer (ok?, message).
+    /// Last action's outcome, shown in the footer (ok?, message), and when it
+    /// was put there.
     msg: Option<(bool, String)>,
+    msg_at: Instant,
+    /// Whether a fetch in this repo prunes on its own. When it does not, the
+    /// list can be missing branches and the view says so.
+    prunes: bool,
+    /// A prune has happened in this session, so the list is current whatever
+    /// the config says.
+    pruned: bool,
+    /// `p` was pressed: the frame that says so is drawn before git is run, or
+    /// the screen would simply freeze for the length of a network round trip.
+    pruning: bool,
 }
 
 pub fn run(_args: Args) {
@@ -68,6 +89,10 @@ pub fn run(_args: Args) {
         state,
         confirm: None,
         msg: None,
+        msg_at: Instant::now(),
+        prunes: prunes_on_fetch("."),
+        pruned: false,
+        pruning: false,
     };
 
     let mut terminal = ratatui::init();
@@ -88,6 +113,23 @@ impl App {
         loop {
             terminal.draw(|frame| draw(frame, self))?;
 
+            // Run the prune after the frame that announced it, never before.
+            if self.pruning {
+                self.pruning = false;
+                self.prune();
+                continue;
+            }
+
+            // A success note gives the footer back to the key hints on its own.
+            // Waiting for a keypress to clear it would leave the one line that
+            // says which keys exist covered by an answer already read.
+            if let Some(left) = self.note_left()
+                && !event::poll(left)?
+            {
+                self.msg = None;
+                continue;
+            }
+
             let Event::Key(key) = event::read()? else {
                 continue;
             };
@@ -106,6 +148,21 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// How long the footer note has left, or None when there is nothing on a
+    /// timer: no note at all, or a failure, which waits for a keypress.
+    fn note_left(&self) -> Option<Duration> {
+        match &self.msg {
+            Some((true, _)) => Some(NOTE.saturating_sub(self.msg_at.elapsed())),
+            _ => None,
+        }
+    }
+
+    /// Put a note in the footer, starting its clock.
+    fn note(&mut self, ok: bool, text: String) {
+        self.msg = Some((ok, text));
+        self.msg_at = Instant::now();
     }
 
     /// Handle one key. Returns true when the app should quit.
@@ -144,8 +201,31 @@ impl App {
         } else if code == KeyCode::Enter && !self.branches.is_empty() {
             self.confirm = Some(false); // default to No
             self.msg = None;
+        } else if code == KeyCode::Char('p') {
+            self.pruning = true;
+            self.note(true, "pruning…".to_string());
         }
         false
+    }
+
+    /// Drop the remote-tracking refs the remote no longer has and read the list
+    /// again, which is the only way a branch whose upstream went away can show
+    /// up here at all. `git remote prune` rather than `git fetch --prune`: the
+    /// ref list is the whole question here, and the objects are `slu sync`'s job.
+    fn prune(&mut self) {
+        let remotes = git_capture(".", &["remote"]).unwrap_or_default();
+        for remote in remotes.lines().filter(|r| !r.is_empty()) {
+            let (ok, out) = git_run(".", &["remote", "prune", remote]);
+            if !ok {
+                self.note(false, first_line(&out));
+                return;
+            }
+        }
+        self.pruned = true;
+        self.branches = load_gone();
+        self.sel = 0;
+        self.state.select((!self.branches.is_empty()).then_some(0));
+        self.note(true, "pruned".to_string());
     }
 
     /// Force-delete the selected branch. On success drop it from the list and
@@ -159,22 +239,30 @@ impl App {
         };
         let (ok, out) = git_run(".", &["branch", "-D", &target]);
 
-        self.msg = if ok {
+        if ok {
             self.branches.remove(self.sel);
             if self.sel >= self.branches.len() {
                 self.sel = self.branches.len().saturating_sub(1);
             }
             self.state
                 .select((!self.branches.is_empty()).then_some(self.sel));
-            Some((true, format!("deleted {target}")))
+            self.note(true, format!("deleted {target}"));
         } else {
-            Some((false, format!("{target}: {}", first_line(&out))))
-        };
+            self.note(false, format!("{target}: {}", first_line(&out)));
+        }
     }
 }
 
 fn draw(frame: &mut ratatui::Frame, app: &mut App) {
-    let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(frame.area());
+    // The staleness note only takes a row while it has something to say, and
+    // once a prune has run in this session it has nothing.
+    let note = u16::from(!app.prunes && !app.pruned);
+    let areas = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(note),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
 
     let title = if app.branches.is_empty() {
         " no branches with a deleted upstream - nothing to tidy ".to_string()
@@ -188,7 +276,10 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_stateful_widget(list, areas[0], &mut app.state);
     list_scrollbar(frame, areas[0], app.branches.len(), app.state.offset());
 
-    frame.render_widget(footer(&app.msg), areas[1]);
+    if note == 1 {
+        frame.render_widget(stale_note(), areas[1]);
+    }
+    frame.render_widget(footer(&app.msg), areas[2]);
 
     if let Some(yes) = app.confirm
         && let Some(b) = app.branches.get(app.sel)
@@ -238,11 +329,20 @@ fn footer(msg: &Option<(bool, String)>) -> Paragraph<'static> {
             Style::default().fg(Color::Red),
         )),
         None => Line::from(Span::styled(
-            format!(" {Y_MOVE} move · enter delete · q quit"),
+            format!(" {Y_MOVE} move · enter delete · p prune · q quit"),
             Style::default().fg(Color::DarkGray),
         )),
     };
     Paragraph::new(line)
+}
+
+/// Said out loud rather than assumed: without pruning, an empty list is not the
+/// same as nothing to tidy.
+fn stale_note() -> Paragraph<'static> {
+    Paragraph::new(Line::from(Span::styled(
+        " refs are only as fresh as your last prune - `p` to prune now, or set `git config --global fetch.prune true`",
+        Style::default().add_modifier(Modifier::DIM),
+    )))
 }
 
 fn gone_item(b: &Gone) -> ListItem<'static> {
@@ -297,15 +397,6 @@ fn load_gone() -> Vec<Gone> {
             .collect()
     })
     .unwrap_or_default()
-}
-
-/// First non-empty line of git output, for a compact one-line message.
-fn first_line(s: &str) -> String {
-    s.lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .to_string()
 }
 
 fn truncate(s: &str, max: usize) -> String {

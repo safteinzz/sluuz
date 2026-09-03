@@ -195,6 +195,32 @@ pub fn git_capture_raw(repo: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Does a fetch in this repo delete remote-tracking refs the remote no longer
+/// has? `tidy` reads `[gone]`, which git only sets once that ref is actually
+/// absent, so a repo that never prunes hides exactly the branches `tidy` is for
+/// and reports "nothing to clean up" as though it were a fact.
+///
+/// `remote.<name>.prune` overrides `fetch.prune`, so it is asked first and its
+/// answer is final when it has one.
+pub fn prunes_on_fetch(repo: &str) -> bool {
+    for key in ["remote.origin.prune", "fetch.prune"] {
+        if let Some(v) = git_capture(repo, &["config", "--get", "--type=bool", key]) {
+            return v == "true";
+        }
+    }
+    false
+}
+
+/// The first non-blank line of a program's output - what a failure is reported
+/// as when the whole of it would not fit.
+pub fn first_line(s: &str) -> String {
+    s.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Run `git -C <repo> <args>` and return (success, combined stdout+stderr).
 /// For commands like fetch/pull where progress goes to stderr and you want to
 /// report what happened regardless of exit status.
@@ -211,7 +237,61 @@ pub fn git_run(repo: &str, args: &[&str]) -> (bool, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::short_remote;
+    use super::{git_capture, prunes_on_fetch, short_remote};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A throwaway git repo under the system temp dir, named so two runs cannot
+    /// collide, and deleted when it goes out of scope - including when an
+    /// assertion panics, or a failing test would leave the machine dirtier than
+    /// it found it. Nothing outside the temp directory is ever touched.
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new(tag: &str) -> TempRepo {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!("sluuz-{tag}-{stamp}"));
+            fs::create_dir_all(&dir).expect("temp dir");
+            git_capture(dir.to_str().expect("utf-8 temp path"), &["init", "-q"]).expect("git init");
+            TempRepo(dir)
+        }
+
+        fn path(&self) -> &str {
+            self.0.to_str().expect("utf-8 temp path")
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn set(repo: &str, key: &str, value: &str) {
+        git_capture(repo, &["config", key, value]).expect("git config");
+    }
+
+    #[test]
+    fn a_remotes_own_prune_setting_beats_the_general_one() {
+        // Which way round this goes decides whether `tidy` tells you your list
+        // may be short. Both keys are set in every case, so whatever the
+        // machine running the suite has in its own git config cannot change the
+        // answer.
+        let dir = TempRepo::new("prune");
+        let repo = dir.path();
+
+        set(repo, "fetch.prune", "false");
+        set(repo, "remote.origin.prune", "true");
+        assert!(prunes_on_fetch(repo), "the remote's own setting wins");
+
+        set(repo, "fetch.prune", "true");
+        set(repo, "remote.origin.prune", "false");
+        assert!(!prunes_on_fetch(repo), "and it wins in the other direction");
+    }
 
     #[test]
     fn the_ssh_form_git_prints_by_default() {

@@ -57,6 +57,15 @@ pub fn pane_height(terminal: &DefaultTerminal) -> u16 {
         .unwrap_or(20)
 }
 
+/// Inner height of the upper (~40%) pane - the list a level's plain keys drive,
+/// and what PageUp/PageDown move it by.
+pub fn upper_pane_height(terminal: &DefaultTerminal) -> u16 {
+    terminal
+        .size()
+        .map(|s| ((s.height as u32 * 4 / 10).saturating_sub(2).max(1)) as u16)
+        .unwrap_or(14)
+}
+
 /// Half the height of the lower (~60%) pane, for vim Ctrl-d/Ctrl-u.
 pub fn half_page(terminal: &DefaultTerminal) -> u16 {
     (pane_height(terminal) / 2).max(1)

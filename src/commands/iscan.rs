@@ -20,8 +20,8 @@ use crate::history::{self, CommitMatch};
 use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
 use crate::tui::input::{
-    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_back, is_down, is_left, is_open, is_right, is_up,
-    norm_esc,
+    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, char_to_byte, is_back, is_down, is_left, is_open,
+    is_right, is_up, norm_esc,
 };
 use crate::tui::widgets::{Modal, diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
 use crate::tui::{
@@ -375,10 +375,6 @@ impl App {
 
 /// Byte offset of character index `idx`, so inserts and deletes stay safe on
 /// multi-byte input.
-fn char_to_byte(s: &str, idx: usize) -> usize {
-    s.char_indices().nth(idx).map(|(b, _)| b).unwrap_or(s.len())
-}
-
 /// Split the bar's text into terms: comma-separated, trimmed, empties dropped.
 fn parse_terms(query: &str) -> Vec<String> {
     query

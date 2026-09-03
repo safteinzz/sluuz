@@ -53,3 +53,10 @@ pub fn norm_esc(code: KeyCode, ctrl: bool) -> KeyCode {
         code
     }
 }
+
+/// Byte offset of the `idx`-th character, for editing a query by caret position
+/// rather than by byte, which a multi-byte character would land in the middle
+/// of.
+pub fn char_to_byte(s: &str, idx: usize) -> usize {
+    s.char_indices().nth(idx).map(|(b, _)| b).unwrap_or(s.len())
+}

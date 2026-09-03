@@ -6,7 +6,7 @@
 //! the current branch when it safely can and refuses (rather than merging) when
 //! it can't - so it can't create merge commits or conflicts.
 
-use crate::git::{display_name, find_repos, git_run};
+use crate::git::{display_name, find_repos, first_line, git_run};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -145,13 +145,4 @@ fn process(name: String, repo: &str, pull: bool) -> Outcome {
         state: State::Fail,
         note: first_line(&pout),
     }
-}
-
-/// First non-empty line of git output, for a compact one-line note.
-fn first_line(s: &str) -> String {
-    s.lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .to_string()
 }

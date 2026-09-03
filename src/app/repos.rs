@@ -37,6 +37,12 @@ impl Scope {
     }
 }
 
+/// Everything about a repo a `/` filter can match: what it is called, what it
+/// is on, and where it came from.
+fn haystack(r: &RepoStatus) -> String {
+    format!("{} {} {}", r.name, r.branch, r.origin)
+}
+
 /// A repo's path relative to the directory being scanned (`crates/vibox`), or
 /// its plain name when it sits directly under it.
 fn relative_name(repo: &Path, base: &Path) -> String {
@@ -73,8 +79,9 @@ impl App {
 
     pub(super) fn rescope_repos(&mut self) {
         let scope = SCOPES[self.rsel.scope];
+        let query = &self.rsel.query;
         let visible = (0..self.repos.len())
-            .filter(|&i| scope.keeps(&self.repos[i]))
+            .filter(|&i| scope.keeps(&self.repos[i]) && query.keeps(&haystack(&self.repos[i])))
             .collect();
         self.rsel.show(visible);
     }
@@ -88,7 +95,6 @@ impl App {
             return;
         };
         self.set_repo(self.repos[i].path.clone());
-        self.rescope_branches();
     }
 }
 

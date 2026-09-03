@@ -46,6 +46,15 @@ slu irepos ~/projects    # or under somewhere else
 One app, three doors: `slu ibranch` opens it at the branches level and
 `slu ilog` at the commits level of the repo you are standing in.
 
+Plain keys drive the list you are on, `Ctrl` the preview under it: `j`/`k` move
+and `PageUp`/`PageDown` page the top pane, `Ctrl-j`/`Ctrl-k` move the preview and
+`Ctrl-d`/`Ctrl-u` half-page it, `h`/`l` slide the scope, `Enter` drills in and
+`Esc` steps back out. `/` filters the top pane and `?` the one below it: terms
+are separated by spaces and all of them have to appear somewhere in a row, so
+`pablo fix` finds what both words are in, whether that is a sha, an author, a
+date or a subject. Lists load in the background and keep filtering as they
+arrive, so nothing you press ever waits on git.
+
 ## Find a leaked string in every repo's history
 
 ```bash
@@ -106,13 +115,19 @@ was deleted · `synced` in step
 ```bash
 slu ibranch [-a]         # push state of every branch, local or local + remote
 slu tidy [path] [-a]     # finished branches across every repo, with a delete command to paste
-slu itidy                # the same list, deleted in place
+slu tidy -p              # the same, after dropping remote branches that are gone
+slu itidy                # the same list, deleted in place (`p` prunes and reloads)
 ```
 
 ![slu ibranch listing eight branches with their push state and sliding between local, all and remote scope, then slu tidy reporting the finished branches across every repo, then slu itidy deleting one through a confirmation dialog that opens on No](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
 
 "Finished" means **upstream gone**, not "merged", so a branch still alive on the
 remote is never suggested for deletion, and the confirm defaults to **No**.
+
+Git only marks a branch gone once the remote-tracking ref is really absent, and
+a plain `git fetch` never removes one - so on a repo that does not prune, this
+list can be missing branches and says so. `-p` prunes first; `git config --global
+fetch.prune true` fixes it for good.
 
 ## Tab completion
 

@@ -1,6 +1,6 @@
 [package]
 name = "sluuz"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 rust-version = "1.88"
 description = "git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management"

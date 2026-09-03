@@ -6,14 +6,18 @@
 //!   slu scan   [path]      Audit repositories for leaked secrets
 //!   slu repos  [path]      Working-tree state across all repos under a path
 //!   slu sync   [path]      Fetch (and optionally fast-forward) all repos
-//!   slu tidy   [path]      Find merged, deletable branches across all repos
+//!   slu tidy   [path]      Find finished branches (upstream gone) across all repos
 //!   slu each   <git args>  Run any git command in every repo
 //!   slu trace              A prettier history view (does not shadow `git log`)
-//!   slu ilog               Interactive log explorer (TUI)
-//!   slu ibranch            Interactive branch explorer (TUI)
-//!   slu istatus            Interactive git status - stage/unstage + diffs
-//!   slu itidy              Interactively delete branches with a gone upstream
 //!   slu completions <sh>   Print a tab-completion script (reuses git's)
+//!
+//! and the interactive twin of each, which `slu --help` lists as its own group:
+//!   slu iscan   [path]     Interactive history search across repos
+//!   slu irepos  [path]     Interactive repo explorer, drilling to a diff
+//!   slu ibranch            Interactive branch explorer
+//!   slu itidy              Interactively delete branches with a gone upstream
+//!   slu ilog    [path…]    Interactive log explorer
+//!   slu istatus            Interactive git status - stage/unstage + diffs
 
 mod app;
 mod commands;
@@ -21,7 +25,7 @@ mod git;
 mod history;
 mod tui;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::process::Command;
 
 /// Shown at the bottom of `slu --help`: the one thing the command list can't
@@ -91,15 +95,12 @@ enum Cmd {
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Sync(commands::sync::Args),
-    /// Find merged, safe-to-delete branches [path]
+    /// Find finished branches (upstream gone), safe to delete [path]
     ///   -a        include already-clean repos
+    ///   -p        drop remote branches the remote no longer has
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Tidy(commands::tidy::Args),
-    /// Interactively delete branches whose upstream is gone (TUI)
-    ///   this repo · enter → confirm popup → enter deletes
-    #[command(verbatim_doc_comment)]
-    Itidy(commands::itidy::Args),
     /// Run any git command in every repo  (e.g. slu each pull --ff-only)
     Each(commands::each::Args),
     /// A prettier history view (aligned log)
@@ -108,12 +109,19 @@ enum Cmd {
     ///   -n N      max commits (30)
     #[command(verbatim_doc_comment)]
     Trace(commands::trace::Args),
-    /// Interactive log explorer (TUI) [path…]
-    ///   -a        include all branches
-    ///   -n N      commits to load (200)
-    ///   [path…]   only commits touching these paths
+    /// Manage sluuz itself: `self update` reinstalls, `self check` looks for a newer release
+    #[command(name = "self", subcommand)]
+    Selfie(commands::selfcmd::Cmd),
+    /// Print a tab-completion script <bash|zsh|fish>
+    ///   --add     append the loader to your shell's rc file for you
+    ///   reuses git's own completion (branches, refs, flags)
     #[command(verbatim_doc_comment)]
-    Ilog(commands::ilog::Args),
+    Completions(commands::completions::Args),
+    /// Interactive history search across repos (TUI) [path]
+    ///   type terms in the bar, enter runs the search
+    ///   -d N      directory depth to scan (3)
+    #[command(verbatim_doc_comment)]
+    Iscan(commands::iscan::Args),
     /// Interactive repo explorer (TUI) [path]
     ///   repos → branches → commits → diff, enter drills in
     ///   --dirty   start on repos with uncommitted work
@@ -125,30 +133,38 @@ enum Cmd {
     ///   -a        local + remote
     #[command(verbatim_doc_comment)]
     Ibranch(commands::ibranch::Args),
-    /// Interactive history search across repos (TUI) [path]
-    ///   type terms in the bar, enter runs the search
-    ///   -d N      directory depth to scan (3)
+    /// Interactively delete branches whose upstream is gone (TUI)
+    ///   this repo · enter → confirm popup → enter deletes
     #[command(verbatim_doc_comment)]
-    Iscan(commands::iscan::Args),
+    Itidy(commands::itidy::Args),
+    /// Interactive log explorer (TUI) [path…]
+    ///   -a        include all branches
+    ///   -n N      commits to load (200)
+    ///   [path…]   only commits touching these paths
+    #[command(verbatim_doc_comment)]
+    Ilog(commands::ilog::Args),
     /// Interactive git status - stage/unstage + diffs (TUI)
     ///   this repo · ←→/hl scope · s/u/space stage
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),
-    /// Manage sluuz itself: `self update` reinstalls, `self check` looks for a newer release
-    #[command(name = "self", subcommand)]
-    Selfie(commands::selfcmd::Cmd),
-    /// Print a tab-completion script <bash|zsh|fish>
-    ///   --add     append the loader to your shell's rc file for you
-    ///   reuses git's own completion (branches, refs, flags)
-    #[command(verbatim_doc_comment)]
-    Completions(commands::completions::Args),
     /// Any other command is passed straight through to git
     #[command(external_subcommand)]
     Git(Vec<String>),
 }
 
 fn main() {
-    let cli = Cli::parse();
+    // The command list is rendered here rather than by clap, which has no way to
+    // give one subcommand a different heading from another. Everything in it
+    // still comes from clap's own metadata, so it cannot drift from the
+    // commands that actually exist.
+    let mut built = Cli::command();
+    built.build();
+    let template = help_template(&built);
+    let matches = Cli::command().help_template(template).get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(e) => e.exit(),
+    };
 
     match cli.command {
         Cmd::Search(args) => commands::search::run(args),
@@ -170,6 +186,58 @@ fn main() {
     }
 }
 
+/// `slu --help` with the commands split in two: the ones that print and exit,
+/// then the ones that take over the terminal. The pairs line up across the two
+/// groups (`scan`/`iscan`, `repos`/`irepos`, `trace`/`ilog`, `tidy`/`itidy`),
+/// which is the shape of the tool.
+fn help_template(cmd: &clap::Command) -> String {
+    let subs: Vec<&clap::Command> = cmd.get_subcommands().filter(|c| !c.is_hide_set()).collect();
+    // One column width across both groups, or the two lists would not line up
+    // with each other and the pairing would stop being visible.
+    let width = subs
+        .iter()
+        .map(|c| c.get_name().chars().count())
+        .max()
+        .unwrap_or(0);
+    let (tui, plain): (Vec<&&clap::Command>, Vec<&&clap::Command>) =
+        subs.iter().partition(|c| is_interactive(c));
+
+    let mut list = String::new();
+    for (heading, group) in [("Commands:", plain), ("Interactive (TUI):", tui)] {
+        list.push_str(heading);
+        list.push('\n');
+        for c in group {
+            list.push_str(&entry(c, width));
+        }
+        list.push('\n');
+    }
+
+    format!(
+        "{{about-with-newline}}\n{{usage-heading}} {{usage}}\n\n{list}Options:\n{{options}}{{after-help}}\n"
+    )
+}
+
+/// One command's row: its name, then its description, whose extra lines are
+/// indented to the same column so a multi-line one still reads as one entry.
+fn entry(cmd: &clap::Command, width: usize) -> String {
+    let about = cmd.get_about().map(ToString::to_string).unwrap_or_default();
+    let mut lines = about.lines();
+    let name = cmd.get_name();
+    let mut row = format!("  {name:<width$}  {}\n", lines.next().unwrap_or(""));
+    for line in lines {
+        row.push_str(&format!("  {:<width$}  {line}\n", ""));
+    }
+    row
+}
+
+/// A command is interactive when its name starts with `i`, which is already the
+/// rule the verbs are named by (`iscan`, `irepos`, `ilog`, …) rather than a
+/// second list kept beside them for the help to read. Nothing here can drift:
+/// a command named to the house rule is grouped by it.
+fn is_interactive(cmd: &clap::Command) -> bool {
+    cmd.get_name().starts_with('i')
+}
+
 /// Forward to real `git`, inheriting stdio so editors, pagers, prompts, and
 /// colors all work, then exit with git's own status code.
 fn passthrough(args: &[String]) -> ! {
@@ -178,6 +246,40 @@ fn passthrough(args: &[String]) -> ! {
         Err(e) => {
             eprintln!("slu: could not run git: {e}");
             std::process::exit(127);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, help_template};
+    use clap::CommandFactory;
+
+    #[test]
+    fn every_interactive_command_is_listed_under_its_own_heading() {
+        // `slu --help` promises two groups, and which group a command lands in
+        // is decided by the `i` its name is meant to start with. Reading the
+        // rendered list back is what catches a command named against that rule,
+        // which would otherwise only be visible to whoever next read the help.
+        let mut built = Cli::command();
+        built.build();
+        let rendered = help_template(&built);
+        let (plain, interactive) = rendered
+            .split_once("Interactive (TUI):")
+            .expect("the list is split into two groups");
+
+        for sub in built.get_subcommands() {
+            let name = sub.get_name();
+            let row = format!("\n  {name} ");
+            let (half, group) = if name.starts_with('i') {
+                (interactive, "interactive")
+            } else {
+                (plain, "plain")
+            };
+            assert!(
+                half.contains(&row),
+                "`{name}` is missing from the {group} group"
+            );
         }
     }
 }

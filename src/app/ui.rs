@@ -2,9 +2,9 @@
 //! below it underneath, and the file diff in place of that list at the bottom
 //! of the drill.
 
-use super::{App, Level, Sel, branches, commits, repos};
+use super::{App, Level, Pane, Sel, branches, commits, repos};
 use crate::git::RepoStatus;
-use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE};
+use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, char_to_byte};
 use crate::tui::widgets::{
     commit_item, diff_hscrollbar, diff_scrollbar, file_item, list_scrollbar, pane_block,
 };
@@ -27,19 +27,42 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
     let (top, bottom) = (areas[0], areas[1]);
 
-    let move_hint = format!("{Y_MOVE} · {X_MOVE} scope");
-    let pick_hint = format!("{CTRL_Y_MOVE} select · enter open");
+    let move_hint = format!("{Y_MOVE} · {X_MOVE} scope · / filter");
+    let pick_hint = format!("{CTRL_Y_MOVE} select · enter open · ? filter");
+    // Which of the two panes a typed filter is going into. Only one at a time,
+    // and it is the pane's own title that shows it, so `/` and `?` can never be
+    // confused for each other.
+    let (edit_top, edit_bot) = (
+        app.editing == Some(Pane::Top),
+        app.editing == Some(Pane::Bottom),
+    );
 
     match app.level {
         // Repos on top, the selected repo's branches below.
         Level::Repos => {
             let scope = repos::SCOPES[app.rsel.scope].label();
             let items = repo_items(app);
-            let top_title = title("repos", Some(scope), &app.rsel, &move_hint);
+            let top_title = title(
+                "repos",
+                Some(scope),
+                &app.rsel,
+                false,
+                Pane::Top,
+                edit_top,
+                &move_hint,
+            );
             list(frame, top, items, top_title, true, &mut app.rsel);
 
             let items = branch_items(app);
-            let bot_title = title("branches", None, &app.bsel, &pick_hint);
+            let bot_title = title(
+                "branches",
+                None,
+                &app.bsel,
+                app.bfeed.slow(),
+                Pane::Bottom,
+                edit_bot,
+                &pick_hint,
+            );
             list(frame, bottom, items, bot_title, true, &mut app.bsel);
         }
 
@@ -48,11 +71,27 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             let scope = branches::SCOPES[app.bsel.scope].label();
             let items = branch_items(app);
             let hint = format!("{move_hint} · ↑=unpushed");
-            let top_title = title("branches", Some(scope), &app.bsel, &hint);
+            let top_title = title(
+                "branches",
+                Some(scope),
+                &app.bsel,
+                app.bfeed.slow(),
+                Pane::Top,
+                edit_top,
+                &hint,
+            );
             list(frame, top, items, top_title, true, &mut app.bsel);
 
             let items = commit_items(app);
-            let bot_title = title("commits", None, &app.csel, &pick_hint);
+            let bot_title = title(
+                "commits",
+                None,
+                &app.csel,
+                app.cfeed.slow(),
+                Pane::Bottom,
+                edit_bot,
+                &pick_hint,
+            );
             list(frame, bottom, items, bot_title, true, &mut app.csel);
         }
 
@@ -60,19 +99,43 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Level::Commits => {
             let items = commit_items(app);
             let hint = format!("{move_hint} · ↑=unpushed");
-            let top_title = title(&commits_label(app), None, &app.csel, &hint);
+            let top_title = title(
+                &commits_label(app),
+                None,
+                &app.csel,
+                app.cfeed.slow(),
+                Pane::Top,
+                edit_top,
+                &hint,
+            );
             list(frame, top, items, top_title, true, &mut app.csel);
 
             let items = file_items(app);
-            let hint = format!("{CTRL_Y_MOVE} select · enter open · esc back");
-            let bot_title = title("files", None, &app.fsel, &hint);
+            let hint = format!("{CTRL_Y_MOVE} select · enter open · ? filter · esc back");
+            let bot_title = title(
+                "files",
+                None,
+                &app.fsel,
+                app.ffeed.slow(),
+                Pane::Bottom,
+                edit_bot,
+                &hint,
+            );
             list(frame, bottom, items, bot_title, true, &mut app.fsel);
         }
 
         // The commit list stays up as context; the diff takes the bottom pane.
         Level::Diff => {
             let items = commit_items(app);
-            let top_title = title(&commits_label(app), None, &app.csel, "");
+            let top_title = title(
+                &commits_label(app),
+                None,
+                &app.csel,
+                app.cfeed.slow(),
+                Pane::Top,
+                false,
+                "",
+            );
             list(frame, top, items, top_title, false, &mut app.csel);
             diff(frame, bottom, app);
         }
@@ -118,20 +181,51 @@ fn diff(frame: &mut Frame, area: Rect, app: &App) {
     diff_hscrollbar(frame, area, app.prepared.max_line(), cell, app.diff_hscroll);
 }
 
-/// `" <name> · <scope>  <i>/<n>   <hint> "`, the title every pane wears.
-fn title(name: &str, scope: Option<&str>, sel: &Sel, hint: &str) -> String {
+/// `" <name> · <scope>  <i>/<n>   <hint> "`, the title every pane wears. A pane
+/// still being streamed into says so with a trailing `…`, so a list that is
+/// merely short is never mistaken for one that has finished arriving - but only
+/// once the load has run long enough to be noticed, or every keypress on a fast
+/// repo would blink it on and off.
+fn title(
+    name: &str,
+    scope: Option<&str>,
+    sel: &Sel,
+    loading: bool,
+    pane: Pane,
+    editing: bool,
+    hint: &str,
+) -> String {
     let name = match scope {
         Some(s) => format!("{name} · {s}"),
         None => name.to_string(),
     };
+    // A filter is shown on the pane it was typed into, which is the only thing
+    // that says whether `/` or `?` was the key that opened it. It takes the key
+    // hints' place, being the thing now deciding what the list holds.
+    let text = &sel.query.text;
+    let key = pane.sigil();
+    let filter = if editing {
+        let at = char_to_byte(text, sel.query.caret);
+        Some(format!("{key}{}▏{}", &text[..at], &text[at..]))
+    } else if !text.is_empty() {
+        Some(format!("{key}{text}"))
+    } else {
+        None
+    };
     if sel.is_empty() {
-        return format!(" {name}  (none) ");
+        let body = if loading { "…" } else { "(none)" };
+        return match &filter {
+            Some(f) => format!(" {name}  {body}   {f} "),
+            None => format!(" {name}  {body} "),
+        };
     }
-    let count = format!("{}/{}", sel.cur + 1, sel.len());
-    if hint.is_empty() {
+    let dots = if loading { "…" } else { "" };
+    let count = format!("{}/{}{dots}", sel.cur + 1, sel.len());
+    let tail = filter.unwrap_or_else(|| hint.to_string());
+    if tail.is_empty() {
         format!(" {name}  {count} ")
     } else {
-        format!(" {name}  {count}   {hint} ")
+        format!(" {name}  {count}   {tail} ")
     }
 }
 
@@ -259,6 +353,9 @@ fn repo_item(r: &RepoStatus, name_w: usize, branch_w: usize, state_w: usize) -> 
 }
 
 fn branch_items(app: &App) -> Vec<ListItem<'static>> {
+    if app.bsel.is_empty() && app.bfeed.slow() {
+        return loading_body();
+    }
     app.bsel
         .visible
         .iter()
@@ -313,7 +410,20 @@ fn branch_mark(b: &branches::Branch) -> (&'static str, Style) {
     ("", Style::default().fg(Color::DarkGray))
 }
 
+/// The body of a pane with nothing in it yet. It is a whole row rather than a
+/// mark on the border because a blank box reads as "there is nothing here",
+/// which is the one thing it does not mean.
+fn loading_body() -> Vec<ListItem<'static>> {
+    vec![ListItem::new(Line::from(Span::styled(
+        "  loading…",
+        Style::default().add_modifier(Modifier::DIM),
+    )))]
+}
+
 fn commit_items(app: &App) -> Vec<ListItem<'static>> {
+    if app.csel.is_empty() && app.cfeed.slow() {
+        return loading_body();
+    }
     app.csel
         .visible
         .iter()
@@ -325,6 +435,9 @@ fn commit_items(app: &App) -> Vec<ListItem<'static>> {
 }
 
 fn file_items(app: &App) -> Vec<ListItem<'static>> {
+    if app.fsel.is_empty() && app.ffeed.slow() {
+        return loading_body();
+    }
     app.fsel
         .visible
         .iter()

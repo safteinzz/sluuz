@@ -142,6 +142,8 @@ write_gitconfig() {
 	gpgsign = false
 [advice]
 	detachedHead = false
+[fetch]
+	prune = true
 EOF
 }
 

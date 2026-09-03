@@ -1,18 +1,9 @@
 //! The branches level: one repo's branches, and picking one to read.
 
 use super::App;
-use crate::git::{SEP, git_capture};
+use crate::git::load;
 
-pub struct Branch {
-    pub is_head: bool,
-    pub remote: bool,
-    pub name: String,
-    pub rel: String,
-    pub author: String,
-    pub has_upstream: bool,
-    /// Raw `%(upstream:track)`: "", "[gone]", "[ahead 2, behind 1]", …
-    pub track: String,
-}
+pub use crate::git::load::Branch;
 
 impl Branch {
     /// A local branch that isn't fully on a remote: never pushed (no upstream),
@@ -75,56 +66,49 @@ impl Scope {
 }
 
 impl App {
-    /// Load every branch (local + remote-tracking) with its push state, newest
-    /// first.
+    /// Read this repo's branches and wait for them. Only the entry point uses
+    /// it: `slu ibranch` has to know before the screen is up whether there is
+    /// anything to show.
     pub(super) fn load_branches(&mut self) {
-        let fmt = format!(
-            "--format=%(HEAD){SEP}%(refname){SEP}%(refname:short){SEP}%(committerdate:relative){SEP}%(authorname){SEP}%(upstream){SEP}%(upstream:track)"
+        self.branches = load::load_branches(&self.repo);
+    }
+
+    /// Start the same read in the background. Nothing waits for it - the pane
+    /// empties now and fills as rows arrive, so walking a list of repos never
+    /// stops on one of them.
+    pub(super) fn request_branches(&mut self) {
+        let seq = self.bfeed.issue();
+        self.branches.clear();
+        self.bsel.show(Vec::new());
+        load::stream_branches(
+            self.repo.clone(),
+            seq,
+            self.bfeed.latest.clone(),
+            self.tx.clone(),
         );
-        self.branches = git_capture(
-            &self.repo,
-            &[
-                "for-each-ref",
-                "--sort=-committerdate",
-                &fmt,
-                "refs/heads",
-                "refs/remotes",
-            ],
-        )
-        .map(|out| {
-            out.lines()
-                .filter_map(|line| {
-                    let mut f = line.split(SEP);
-                    let head = f.next()?;
-                    let refname = f.next()?;
-                    let short = f.next()?;
-                    let rel = f.next().unwrap_or("").to_string();
-                    let author = f.next().unwrap_or("").to_string();
-                    let upstream = f.next().unwrap_or("");
-                    let track = f.next().unwrap_or("").to_string();
-                    // Skip the symbolic `refs/remotes/*/HEAD` alias - it's noise.
-                    if refname.ends_with("/HEAD") {
-                        return None;
-                    }
-                    Some(Branch {
-                        is_head: head.trim() == "*",
-                        remote: refname.starts_with("refs/remotes/"),
-                        name: short.to_string(),
-                        rel,
-                        author,
-                        has_upstream: !upstream.is_empty(),
-                        track,
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    }
+
+    /// Fold newly streamed branches into what is on screen, honouring both the
+    /// scope and the filter, so rows that arrive during a search are held to
+    /// the same test as the ones already there.
+    pub(super) fn extend_branches(&mut self, from: usize) {
+        let scope = SCOPES[self.bsel.scope];
+        let query = &self.bsel.query;
+        let more: Vec<usize> = (from..self.branches.len())
+            .filter(|&i| {
+                scope.keeps(&self.branches[i]) && query.keeps(&haystack(&self.branches[i]))
+            })
+            .collect();
+        self.bsel.append(more);
     }
 
     pub(super) fn rescope_branches(&mut self) {
         let scope = SCOPES[self.bsel.scope];
+        let query = &self.bsel.query;
         let visible = (0..self.branches.len())
-            .filter(|&i| scope.keeps(&self.branches[i]))
+            .filter(|&i| {
+                scope.keeps(&self.branches[i]) && query.keeps(&haystack(&self.branches[i]))
+            })
             .collect();
         self.bsel.show(visible);
     }
@@ -135,15 +119,19 @@ impl App {
         let Some(i) = self.bsel.idx() else {
             self.commits.clear();
             self.csel.show(Vec::new());
-            self.files.clear();
-            self.fsel.show(Vec::new());
             return;
         };
         self.ensure_unpushed();
         self.log_args = vec![self.branches[i].name.clone()];
         self.limit = super::COMMITS_PER_BRANCH;
-        self.load_commits();
+        self.request_commits();
     }
+}
+
+/// Everything about a branch a filter can match: its name, its push state and
+/// who last touched it.
+fn haystack(b: &Branch) -> String {
+    format!("{} {} {} {}", b.name, b.status(), b.rel, b.author)
 }
 
 /// Pull the number after `key` out of a `%(upstream:track)` string like
