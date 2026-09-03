@@ -647,6 +647,11 @@ impl App {
                 self.pending = true;
             }
             Level::Commits => {
+                // Read the push state again *before* the log: the commits about
+                // to arrive are tested against this set, and a commit made since
+                // the view opened is in neither the old set nor on a remote, so
+                // a stale one silently reports it as pushed.
+                self.ensure_unpushed();
                 self.csel.restore = self.commit_hash().map(str::to_string);
                 self.request_commits();
                 self.pending = true;
