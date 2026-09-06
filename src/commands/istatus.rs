@@ -4,8 +4,9 @@
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
 //! slide the scope between **staged**, **all**, and **unstaged**; `s`/`u`/Space
 //! stage / unstage / toggle the selected file; Ctrl-↑/↓ (or Ctrl-j/k) and
-//! Ctrl-d/u scroll the diff. `j`/`k` move the file list. `q` / `Esc` / `Ctrl-C`
-//! quit.
+//! Ctrl-d/u scroll the diff. `j`/`k` move the file list. `r` reads the working
+//! tree again, for when a build or another terminal has touched it since this
+//! one opened. `q` / `Esc` / `Ctrl-C` quit.
 //!
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
@@ -167,10 +168,27 @@ impl App {
         self.visible.get(self.sel).map(|&i| &self.entries[i])
     }
 
-    /// Re-read the working tree, then re-filter and re-diff.
+    /// Re-read the working tree, then re-filter and re-diff. The cursor is kept
+    /// on the file it was on by path, not by index: staging a file can drop it
+    /// out of the scope above the cursor, and a reload is exactly when the rows
+    /// underneath shift.
     fn reload(&mut self) {
+        let keep = self.current().map(|e| e.path.clone());
         self.entries = load_status(&self.root);
         self.rescope();
+        if let Some(path) = keep
+            && let Some(i) = self
+                .visible
+                .iter()
+                .position(|&i| self.entries[i].path == path)
+            && i != self.sel
+        {
+            self.sel = i;
+            self.state.select(Some(self.sel));
+            self.diff_scroll = 0;
+            self.diff_hscroll = 0;
+            self.refresh_diff();
+        }
     }
 
     /// Re-filter for the current scope, keep the cursor in range, and refresh
@@ -431,10 +449,13 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         .map(|&i| status_item(&app.entries[i]))
         .collect();
     let top_title = if app.visible.is_empty() {
-        format!(" {}  clean   {X_MOVE} scope · q quit ", app.scope().label())
+        format!(
+            " {}  clean   {X_MOVE} scope · r refresh · q quit ",
+            app.scope().label()
+        )
     } else {
         format!(
-            " {}  {}/{}   {Y_MOVE} · {X_MOVE} scope · s/u/space stage · q quit ",
+            " {}  {}/{}   {Y_MOVE} · {X_MOVE} scope · s/u/space stage · r refresh · q quit ",
             app.scope().label(),
             app.sel + 1,
             app.visible.len()

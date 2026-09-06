@@ -282,10 +282,16 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     ])
     .split(frame.area());
 
+    // The title says "local" out loud: what this deletes is the local branch,
+    // and the remote copy is already the thing that went away.
     let title = if app.branches.is_empty() {
-        " no branches with a deleted upstream - nothing to tidy ".to_string()
+        " no local branches whose upstream is [gone] - nothing to tidy ".to_string()
     } else {
-        format!(" gone branches  {}/{} ", app.sel + 1, app.branches.len())
+        format!(
+            " local branches whose upstream is [gone]  {}/{} ",
+            app.sel + 1,
+            app.branches.len()
+        )
     };
     let list = List::new(app.branches.iter().map(gone_item).collect::<Vec<_>>())
         .block(pane_block(title, true))
