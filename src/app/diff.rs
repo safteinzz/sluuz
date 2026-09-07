@@ -6,7 +6,7 @@
 use super::{App, Level};
 use crate::git::load::load_diff_raw;
 use crate::tui::difftool::{DiffTool, difftool_commit};
-use crate::tui::highlight::{prepare_diff, render_prepared};
+use crate::tui::highlight::{RenderedDiff, render_prepared};
 use crate::tui::{clamp_hscroll, clamp_scroll, half_page, pane_height};
 use ratatui::DefaultTerminal;
 
@@ -17,12 +17,22 @@ const PAGE_STEP: u16 = 10;
 
 impl App {
     /// Open the selected file of the selected commit into the diff level.
+    ///
+    /// `git show` plus syntect on a thousand-line file is long enough to freeze
+    /// a held `j` through the file list, so the work goes to a thread and the
+    /// pane opens empty. A move that supersedes this one bumps the sequence,
+    /// and the answer to the old one is dropped when it lands.
     pub(super) fn open_diff(&mut self) {
-        let (Some(hash), Some(path)) = (self.commit_hash(), self.file_path()) else {
+        let (Some(hash), Some(path)) = (
+            self.commit_hash().map(str::to_string),
+            self.file_path().map(str::to_string),
+        ) else {
             return;
         };
-        let raw = load_diff_raw(&self.repo, hash, path);
-        self.prepared = prepare_diff(&raw);
+        let repo = self.repo.clone();
+        self.dfeed
+            .request(move || load_diff_raw(&repo, &hash, &path));
+        self.prepared = RenderedDiff::default();
         self.diff_scroll = 0;
         self.diff_hscroll = 0;
         self.diff = render_prepared(&self.prepared, self.width, 0);

@@ -40,7 +40,6 @@ pub fn run(args: Args) {
     let repo =
         git_capture(".", &["rev-parse", "--show-toplevel"]).unwrap_or_else(|| ".".to_string());
 
-    // Build the `git log` args: [--all] then `-- <paths>` to filter to a file.
     let mut log_args: Vec<String> = Vec::new();
     if args.all {
         log_args.push("--all".to_string());

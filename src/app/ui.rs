@@ -11,7 +11,7 @@ use crate::tui::widgets::{
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
 /// Width the branch name column is padded to, and the cap on the repo one,
@@ -172,7 +172,17 @@ fn diff(frame: &mut Frame, area: Rect, app: &App) {
             " {path}   enter difftool · {CTRL_Y_MOVE}·ctrl-d/u scroll · {CTRL_X_MOVE} pan · esc back "
         ),
     };
-    let view = Paragraph::new(app.diff.clone())
+    // An empty diff and one still being highlighted look identical, so say
+    // which it is once the load has run long enough to be noticed.
+    let body = if app.diff.lines.is_empty() && app.dfeed.slow() {
+        Text::from(Line::from(Span::styled(
+            "  loading…",
+            Style::default().add_modifier(Modifier::DIM),
+        )))
+    } else {
+        app.diff.clone()
+    };
+    let view = Paragraph::new(body)
         .block(pane_block(title, true))
         .scroll((app.diff_scroll, 0));
     frame.render_widget(view, area);

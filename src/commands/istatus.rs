@@ -11,8 +11,10 @@
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
 use crate::git::{git_capture, git_capture_raw, git_run};
+use crate::tui::FRAME;
+use crate::tui::difffeed::DiffFeed;
 use crate::tui::difftool::{DiffTool, run_difftool};
-use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
+use crate::tui::highlight::{RenderedDiff, render_prepared};
 use crate::tui::input::{
     CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
 };
@@ -64,6 +66,9 @@ struct Entry {
     x: char,
     y: char,
     path: String,
+    /// How many files a collapsed untracked directory holds, when it held too
+    /// many to list.
+    hidden: usize,
 }
 
 impl Entry {
@@ -108,6 +113,7 @@ struct App {
     diff: Text<'static>,
     diff_scroll: u16,
     diff_hscroll: u16,
+    dfeed: DiffFeed,
 }
 
 pub fn run(_args: Args) {
@@ -141,6 +147,7 @@ pub fn run(_args: Args) {
         diff: Text::default(),
         diff_scroll: 0,
         diff_hscroll: 0,
+        dfeed: DiffFeed::default(),
     };
 
     let mut terminal = ratatui::init();
@@ -211,19 +218,31 @@ impl App {
         self.refresh_diff();
     }
 
-    /// Highlight the selected file's diff. This is the expensive syntect pass,
-    /// so it runs on selection changes only, never on a scroll.
+    /// Ask for the selected file's diff. The read and the syntect pass happen
+    /// on a worker, so moving the cursor never waits for either; the pane is
+    /// cleared now and filled when the answer for this row arrives.
     fn refresh_diff(&mut self) {
-        match self.current() {
-            Some(entry) => {
-                let raw = diff_for(&self.root, entry, self.scope());
-                self.prepared = prepare_diff(&raw);
-                self.diff = render_prepared(&self.prepared, self.width, 0);
-            }
-            None => {
-                self.prepared = RenderedDiff::default();
-                self.diff = Text::default();
-            }
+        self.prepared = RenderedDiff::default();
+        self.diff = Text::default();
+        let Some(entry) = self.current() else {
+            self.dfeed.idle();
+            return;
+        };
+        let (root, scope) = (self.root.clone(), self.scope());
+        let entry = Entry {
+            x: entry.x,
+            y: entry.y,
+            path: entry.path.clone(),
+            hidden: entry.hidden,
+        };
+        self.dfeed.request(move || diff_for(&root, &entry, scope));
+    }
+
+    /// Take a diff that has arrived, unless the cursor has moved on since.
+    fn drain_diff(&mut self) {
+        if let Some(prepared) = self.dfeed.take() {
+            self.prepared = prepared;
+            self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
         }
     }
 
@@ -278,8 +297,14 @@ impl App {
 
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         loop {
+            self.drain_diff();
             terminal.draw(|frame| draw(frame, self))?;
 
+            // While a diff is still being prepared, come back on a frame timer
+            // to show it; otherwise block on the key and leave the CPU alone.
+            if self.dfeed.loading() && !event::poll(FRAME)? {
+                continue;
+            }
             match event::read()? {
                 Event::Resize(_, _) => {
                     let w = pane_width(terminal);
@@ -433,9 +458,54 @@ fn load_status(root: &str) -> Vec<Entry> {
             x,
             y,
             path: tok[3..].to_string(),
+            hidden: 0,
         });
     }
-    entries
+    expand_untracked_dirs(root, entries)
+}
+
+/// How many files an untracked directory may contribute before it stays one
+/// row. A directory listed as `development/` cannot be read or staged
+/// selectively, which is most of what this view is for; a `node_modules/`
+/// listed file by file is worse.
+const UNTRACKED_CAP: usize = 25;
+
+/// Replace each untracked directory with the files inside it, unless there are
+/// more than `UNTRACKED_CAP` of them. git collapses a wholly untracked
+/// directory into one row (`?? development/`) unless it is asked for `-uall`,
+/// and that row says nothing about what is in it.
+fn expand_untracked_dirs(root: &str, entries: Vec<Entry>) -> Vec<Entry> {
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if !(entry.untracked() && entry.path.ends_with('/')) {
+            out.push(entry);
+            continue;
+        }
+        let inside = untracked_inside(root, &entry.path);
+        match inside.len() {
+            0 => out.push(entry),
+            n if n > UNTRACKED_CAP => out.push(Entry { hidden: n, ..entry }),
+            _ => out.extend(inside),
+        }
+    }
+    out
+}
+
+/// The untracked files under one directory, as their own entries.
+fn untracked_inside(root: &str, dir: &str) -> Vec<Entry> {
+    let raw = match git_capture_raw(root, &["status", "--porcelain", "-z", "-uall", "--", dir]) {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+    raw.split('\0')
+        .filter(|t| !t.is_empty() && t.len() > 3)
+        .map(|t| Entry {
+            x: t.as_bytes()[0] as char,
+            y: t.as_bytes()[1] as char,
+            path: t[3..].to_string(),
+            hidden: 0,
+        })
+        .collect()
 }
 
 fn draw(frame: &mut ratatui::Frame, app: &mut App) {
@@ -480,7 +550,16 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
             format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan ")
         }
     };
-    let diff = Paragraph::new(app.diff.clone())
+    // An empty diff and one still being prepared look the same, so say which.
+    let body = if app.diff.lines.is_empty() && app.dfeed.slow() {
+        Text::from(Line::from(Span::styled(
+            "  loading…",
+            Style::default().add_modifier(Modifier::DIM),
+        )))
+    } else {
+        app.diff.clone()
+    };
+    let diff = Paragraph::new(body)
         .block(pane_block(title, true))
         .scroll((app.diff_scroll, 0));
     frame.render_widget(diff, areas[1]);
@@ -534,5 +613,12 @@ fn status_item(e: &Entry) -> ListItem<'static> {
         Span::styled(yc.to_string(), ys),
         Span::raw("  "),
         Span::raw(e.path.clone()),
+        Span::styled(
+            match e.hidden {
+                0 => String::new(),
+                n => format!("  {n} files"),
+            },
+            Style::default().fg(Color::DarkGray),
+        ),
     ]))
 }

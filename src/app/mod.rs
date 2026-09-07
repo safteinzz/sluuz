@@ -19,6 +19,7 @@ pub use branches::Branch;
 
 use crate::git::RepoStatus;
 use crate::git::load::{Batch, Commit, FileEntry};
+use crate::tui::difffeed::DiffFeed;
 use crate::tui::highlight::RenderedDiff;
 use crate::tui::input::char_to_byte;
 use crate::tui::widgets::Modal;
@@ -42,7 +43,7 @@ const COMMITS_PER_BRANCH: usize = 10_000;
 
 /// How long a frame waits for a key while rows are still arriving. With nothing
 /// in flight the loop blocks on the key instead, so an idle TUI costs nothing.
-const FRAME: Duration = Duration::from_millis(33);
+use crate::tui::FRAME;
 
 /// How long a pane may be empty before it says it is still loading. A load
 /// quick enough not to be noticed says nothing at all: a word that appears and
@@ -362,6 +363,7 @@ pub struct App {
     files_for: String,
 
     // ── diff level ──────────────────────────────────────────────────────────
+    dfeed: DiffFeed,
     prepared: RenderedDiff,
     diff: Text<'static>,
     diff_scroll: u16,
@@ -402,6 +404,7 @@ impl App {
             fsel: Sel::default(),
             ffeed: Feed::default(),
             files_for: String::new(),
+            dfeed: DiffFeed::default(),
             prepared: RenderedDiff::default(),
             diff: Text::default(),
             diff_scroll: 0,
@@ -519,7 +522,7 @@ impl App {
     /// Is any pane still being streamed into? While one is, the loop comes back
     /// on a frame timer to show what has arrived.
     fn filling(&self) -> bool {
-        self.bfeed.loading || self.cfeed.loading || self.ffeed.loading
+        self.bfeed.loading || self.cfeed.loading || self.ffeed.loading || self.dfeed.loading()
     }
 
     /// Take everything the background loads have produced since the last frame.
@@ -562,6 +565,10 @@ impl App {
                     }
                 }
             }
+        }
+        if let Some(prepared) = self.dfeed.take() {
+            self.prepared = prepared;
+            self.relayout_diff();
         }
         // Streaming can put a commit under the cursor that was not there when
         // the pane was last asked for, so the files pane follows it here - but
