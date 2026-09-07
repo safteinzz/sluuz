@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 /// How long a success note sits in the footer before the key hints come back.
 /// A failure is not given one: it stays until a keypress, because it is the
 /// only place git's own words are shown.
-const NOTE: Duration = Duration::from_secs(4);
+const NOTE: Duration = Duration::from_secs(3);
 
 #[derive(clap::Args)]
 pub struct Args {}
@@ -121,9 +121,9 @@ impl App {
                 continue;
             }
 
-            // A success note gives the footer back to the key hints on its own.
-            // Waiting for a keypress to clear it would leave the one line that
-            // says which keys exist covered by an answer already read.
+            // A note gives the footer back to the key hints on its own. Waiting
+            // for a keypress to clear it would leave the one line that says
+            // which keys exist covered by an answer already read.
             if let Some(left) = self.note_left()
                 && !event::poll(left)?
             {
@@ -151,13 +151,14 @@ impl App {
         Ok(())
     }
 
-    /// How long the footer note has left, or None when there is nothing on a
-    /// timer: no note at all, or a failure, which waits for a keypress.
+    /// How long the footer note has left, or None when there is no note. Both
+    /// kinds are on the same clock, the same one every other crate's status line
+    /// runs on: a note that outstays it covers the one line saying which keys
+    /// exist, and a failure worth more than three seconds is a box, not a line.
     fn note_left(&self) -> Option<Duration> {
-        match &self.msg {
-            Some((true, _)) => Some(NOTE.saturating_sub(self.msg_at.elapsed())),
-            _ => None,
-        }
+        self.msg
+            .as_ref()
+            .map(|_| NOTE.saturating_sub(self.msg_at.elapsed()))
     }
 
     /// Put a note in the footer, starting its clock.
@@ -348,9 +349,11 @@ fn footer(msg: &Option<(bool, String)>) -> Paragraph<'static> {
             format!(" ✓ {m}"),
             Style::default().fg(Color::Green),
         )),
+        // Yellow, not red: red is the colour of a gate in front of something
+        // about to be lost, and this has already happened.
         Some((false, m)) => Line::from(Span::styled(
             format!(" ✗ {m}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(Color::Yellow),
         )),
         None => Line::from(Span::styled(
             format!(" {Y_MOVE} move · enter delete · r refresh · p prune · q quit"),
