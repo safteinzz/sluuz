@@ -4,7 +4,7 @@
 //! re-lay-out the spans that pass already produced.
 
 use super::{App, Level};
-use crate::git::load::load_diff_raw;
+use crate::git::load::{commit_diff_ctx, load_diff_raw};
 use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{RenderedDiff, render_prepared};
 use crate::tui::{clamp_hscroll, clamp_scroll, half_page, pane_height};
@@ -30,8 +30,10 @@ impl App {
             return;
         };
         let repo = self.repo.clone();
-        self.dfeed
-            .request(move || load_diff_raw(&repo, &hash, &path));
+        self.dfeed.request(move || {
+            let raw = load_diff_raw(&repo, &hash, &path);
+            (raw, commit_diff_ctx(&repo, &hash, &path))
+        });
         self.prepared = RenderedDiff::default();
         self.diff_scroll = 0;
         self.diff_hscroll = 0;

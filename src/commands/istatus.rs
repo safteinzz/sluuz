@@ -10,11 +10,12 @@
 //!
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
+use crate::git::load::load_blob;
 use crate::git::{git_capture, git_capture_raw, git_run};
 use crate::tui::FRAME;
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::difftool::{DiffTool, run_difftool};
-use crate::tui::highlight::{RenderedDiff, render_prepared};
+use crate::tui::highlight::{Blob, DiffContext, RenderedDiff, render_prepared};
 use crate::tui::input::{
     CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
 };
@@ -29,7 +30,9 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use std::fs;
 use std::io::{self, IsTerminal};
+use std::path::Path;
 
 /// Rows a Ctrl-j/k moves the diff, columns a Ctrl-h/l pans it, and the PgUp/PgDn
 /// jump.
@@ -235,7 +238,12 @@ impl App {
             path: entry.path.clone(),
             hidden: entry.hidden,
         };
-        self.dfeed.request(move || diff_for(&root, &entry, scope));
+        self.dfeed.request(move || {
+            (
+                diff_for(&root, &entry, scope),
+                blobs_for(&root, &entry, scope),
+            )
+        });
     }
 
     /// Take a diff that has arrived, unless the cursor has moved on since.
@@ -418,17 +426,54 @@ fn diff_for(root: &str, entry: &Entry, scope: Scope) -> String {
         let (_, out) = git_run(root, &["diff", "--no-index", "--", nul, &entry.path]);
         return out;
     }
-    let cached = match scope {
-        Scope::Staged => true,
-        Scope::Unstaged => false,
-        Scope::All => !entry.unstaged(),
-    };
-    let args: &[&str] = if cached {
+    let args: &[&str] = if cached(entry, scope) {
         &["diff", "--cached", "--", &entry.path]
     } else {
         &["diff", "--", &entry.path]
     };
     git_capture(root, args).unwrap_or_default()
+}
+
+/// Which pair `diff_for` compares: the index against HEAD, or the working tree
+/// against the index.
+fn cached(entry: &Entry, scope: Scope) -> bool {
+    match scope {
+        Scope::Staged => true,
+        Scope::Unstaged => false,
+        Scope::All => !entry.unstaged(),
+    }
+}
+
+/// The two sides of that same diff as whole files, which is what lets a hunk
+/// starting mid-file be highlighted with the state of the lines above it. The
+/// working tree is read from disk because git has no revision name for it.
+fn blobs_for(root: &str, entry: &Entry, scope: Scope) -> DiffContext {
+    let worktree = || -> Blob {
+        let path = Path::new(root).join(&entry.path);
+        Box::new(move || fs::read_to_string(path).ok())
+    };
+    // an empty revision names the index copy: `git show :<path>`
+    let rev = |rev: &str| -> Blob {
+        let (root, rev, path) = (root.to_string(), rev.to_string(), entry.path.clone());
+        Box::new(move || load_blob(&root, &rev, &path))
+    };
+    if entry.untracked() {
+        return DiffContext {
+            old: None,
+            new: Some(worktree()),
+        };
+    }
+    if cached(entry, scope) {
+        DiffContext {
+            old: Some(rev("HEAD")),
+            new: Some(rev("")),
+        }
+    } else {
+        DiffContext {
+            old: Some(rev("")),
+            new: Some(worktree()),
+        }
+    }
 }
 
 /// Parse `git status --porcelain -z` into entries. `-z` NUL-separates records

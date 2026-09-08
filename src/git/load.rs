@@ -4,7 +4,8 @@
 //! Every loader takes the repo to read, so one view can walk several repos in
 //! the same session. `"."` is the current one.
 
-use crate::git::{SEP, git_capture};
+use crate::git::{SEP, git_capture, git_capture_raw};
+use crate::tui::highlight::{Blob, DiffContext};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -309,4 +310,24 @@ pub fn load_files(repo: &str, hash: &str, pathspec: &[&str]) -> Vec<FileEntry> {
 /// for scrolling without re-shelling out to git).
 pub fn load_diff_raw(repo: &str, hash: &str, path: &str) -> String {
     git_capture(repo, &["show", "--format=", hash, "--", path]).unwrap_or_default()
+}
+
+/// One file's whole text at `rev`, untrimmed because indentation is data here.
+/// Nothing when the path did not exist at that revision.
+pub fn load_blob(repo: &str, rev: &str, path: &str) -> Option<String> {
+    git_capture_raw(repo, &["show", &format!("{rev}:{path}")])
+}
+
+/// The two revisions a commit's diff is against, for `prepare_diff` to prime its
+/// highlighter with. A root commit has no `^`, so its old side simply reads back
+/// nothing and that half is highlighted from the hunk as before.
+pub fn commit_diff_ctx(repo: &str, hash: &str, path: &str) -> DiffContext {
+    let side = |rev: String| -> Blob {
+        let (repo, path) = (repo.to_string(), path.to_string());
+        Box::new(move || load_blob(&repo, &rev, &path))
+    };
+    DiffContext {
+        old: Some(side(format!("{hash}^"))),
+        new: Some(side(hash.to_string())),
+    }
 }

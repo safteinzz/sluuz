@@ -8,7 +8,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use crate::tui::highlight::{RenderedDiff, prepare_diff};
+use crate::tui::highlight::{DiffContext, RenderedDiff, prepare_diff};
 
 /// How long that may take before a pane admits it is loading. A wait nobody
 /// notices says nothing, or the word blinks on every keypress in a small repo.
@@ -38,14 +38,17 @@ impl Default for DiffFeed {
 }
 
 impl DiffFeed {
-    /// Ask for a diff. `raw` runs on the worker and returns what git said.
-    pub fn request(&mut self, raw: impl FnOnce() -> String + Send + 'static) {
+    /// Ask for a diff. `raw` runs on the worker and returns what git said,
+    /// paired with where to read the file's two sides when a hunk starts too far
+    /// down the file to highlight on its own.
+    pub fn request(&mut self, raw: impl FnOnce() -> (String, DiffContext) + Send + 'static) {
         self.seq += 1;
         self.loading = true;
         self.since = Some(Instant::now());
         let (seq, tx) = (self.seq, self.tx.clone());
         std::thread::spawn(move || {
-            let _ = tx.send((seq, prepare_diff(&raw())));
+            let (text, ctx) = raw();
+            let _ = tx.send((seq, prepare_diff(&text, ctx)));
         });
     }
 
@@ -86,14 +89,19 @@ mod tests {
         RenderedDiff::default()
     }
 
+    /// A request that asks git for nothing.
+    fn nothing() -> (String, DiffContext) {
+        (String::new(), DiffContext::default())
+    }
+
     #[test]
     fn an_answer_to_a_row_you_have_left_is_dropped() {
         // The whole point of the sequence: a held `j` starts a load per row it
         // passes, and the slow one must not land on the row you stopped on.
         let mut feed = DiffFeed::default();
         let (first, second) = (feed.tx.clone(), feed.tx.clone());
-        feed.request(String::new); // seq 1
-        feed.request(String::new); // seq 2, supersedes it
+        feed.request(nothing); // seq 1
+        feed.request(nothing); // seq 2, supersedes it
 
         let _ = first.send((1, empty()));
         assert!(feed.take().is_none(), "the answer to seq 1 is not wanted");
@@ -106,7 +114,7 @@ mod tests {
     #[test]
     fn a_row_with_no_diff_stops_the_waiting() {
         let mut feed = DiffFeed::default();
-        feed.request(String::new);
+        feed.request(nothing);
         assert!(feed.loading());
         feed.idle();
         assert!(

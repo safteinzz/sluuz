@@ -27,11 +27,88 @@ fn max_line_width(raw: &str) -> usize {
 
 // ── side-by-side diff rendering ─────────────────────────────────────────────
 
+/// The whole text of one side of the file a diff is about, read only when a
+/// hunk turns out to need it.
+pub type Blob = Box<dyn FnOnce() -> Option<String> + Send>;
+
+/// Where to read that text, per side. A hunk starting at line 375 hands syntect
+/// a closing `"""` it never saw opened, which it reads as an opening one and
+/// stains every line below; the cure is the lines above the hunk, and only the
+/// caller knows which revisions they live in. It describes one file, so it is
+/// spent on the first `diff --git` of the text - the only shape the interactive
+/// views ever show.
+#[derive(Default)]
+pub struct DiffContext {
+    pub old: Option<Blob>,
+    pub new: Option<Blob>,
+}
+
+/// Past this many bytes a file is not primed: parsing a megabyte to find the
+/// line that opened a docstring costs more than the stain does.
+const MAX_PRIME: usize = 1 << 20;
+
+/// One side's highlighter, plus the file text that catches it up when a hunk
+/// starts past the line it has reached.
+struct Side {
+    hl: HighlightLines<'static>,
+    blob: Option<Blob>,
+    lines: Option<Vec<String>>,
+    /// File lines this highlighter has consumed, primed or rendered.
+    fed: usize,
+}
+
+impl Side {
+    fn new(syntax: &'static SyntaxReference, blob: Option<Blob>) -> Self {
+        Side {
+            hl: HighlightLines::new(syntax, theme()),
+            blob,
+            lines: None,
+            fed: 0,
+        }
+    }
+
+    fn line(&mut self, ps: &SyntaxSet, code: &str) -> Vec<Span<'static>> {
+        self.fed += 1;
+        hl_spans(&mut self.hl, ps, code)
+    }
+
+    /// Push the file's own lines through the highlighter up to `start`, throwing
+    /// the spans away: what a hunk wants from the lines above it is syntect's
+    /// state, not their colours. One fetch per side per file, and none at all
+    /// while the hunks follow on from each other.
+    fn prime(&mut self, ps: &SyntaxSet, start: usize) {
+        if start <= self.fed + 1 {
+            return;
+        }
+        if self.lines.is_none() {
+            let Some(blob) = self.blob.take() else {
+                return;
+            };
+            let Some(text) = blob().filter(|t| t.len() <= MAX_PRIME) else {
+                return;
+            };
+            self.lines = Some(text.lines().map(str::to_string).collect());
+        }
+        let Side { hl, lines, fed, .. } = self;
+        let Some(lines) = lines.as_ref() else {
+            return;
+        };
+        let upto = (start - 1).min(lines.len());
+        if upto <= *fed {
+            return;
+        }
+        for line in &lines[*fed..upto] {
+            let _ = hl.highlight_line(&format!("{line}\n"), ps);
+        }
+        *fed = upto;
+    }
+}
+
 /// Two highlighters per file - one for the old side, one for the new - so a
 /// removed line's syntax state never corrupts the added side and vice versa.
 struct FileHl {
-    old: HighlightLines<'static>,
-    new: HighlightLines<'static>,
+    old: Side,
+    new: Side,
 }
 
 /// One accumulated changed line: its line number and highlighted spans.
@@ -79,9 +156,8 @@ impl RenderedDiff {
 /// Parse `git show` output and syntax-highlight every line **once**. This is
 /// the expensive step (syntect); call it when a file is opened, then re-render
 /// with `render_prepared` for free on every scroll.
-pub fn prepare_diff(raw: &str) -> RenderedDiff {
+pub fn prepare_diff(raw: &str, mut ctx: DiffContext) -> RenderedDiff {
     let ps = syntaxes();
-    let theme = theme();
 
     let mut rows: Vec<DiffRow> = Vec::new();
     let mut hl: Option<FileHl> = None;
@@ -96,9 +172,15 @@ pub fn prepare_diff(raw: &str) -> RenderedDiff {
             flush_pairs(&mut rows, &mut rem, &mut add);
             in_patch = true;
             let syntax = syntax_for(ps, rest.rsplit(" b/").next().unwrap_or(""));
+            // Plain text has no state to get wrong, so it never pays for a blob.
+            let (old, new) = if std::ptr::eq(syntax, ps.find_syntax_plain_text()) {
+                (None, None)
+            } else {
+                (ctx.old.take(), ctx.new.take())
+            };
             hl = Some(FileHl {
-                old: HighlightLines::new(syntax, theme),
-                new: HighlightLines::new(syntax, theme),
+                old: Side::new(syntax, old),
+                new: Side::new(syntax, new),
             });
             rows.push(DiffRow::Header(plain(
                 line,
@@ -120,6 +202,10 @@ pub fn prepare_diff(raw: &str) -> RenderedDiff {
             if let Some((a, _, c, _)) = parse_hunk(line) {
                 old_ln = a;
                 new_ln = c;
+                if let Some(h) = hl.as_mut() {
+                    h.old.prime(ps, a);
+                    h.new.prime(ps, c);
+                }
             }
             rows.push(DiffRow::Header(plain(
                 line,
@@ -331,14 +417,14 @@ fn fit_cell(
 
 fn hl_old(hl: &mut Option<FileHl>, ps: &SyntaxSet, code: &str) -> Vec<Span<'static>> {
     match hl {
-        Some(h) => hl_spans(&mut h.old, ps, code),
+        Some(h) => h.old.line(ps, code),
         None => vec![Span::raw(code.to_string())],
     }
 }
 
 fn hl_new(hl: &mut Option<FileHl>, ps: &SyntaxSet, code: &str) -> Vec<Span<'static>> {
     match hl {
-        Some(h) => hl_spans(&mut h.new, ps, code),
+        Some(h) => h.new.line(ps, code),
         None => vec![Span::raw(code.to_string())],
     }
 }
@@ -407,4 +493,58 @@ fn theme() -> &'static Theme {
             .or_else(|| ts.themes.remove("base16-ocean.dark"))
             .unwrap_or_else(|| ts.themes.values().next().cloned().unwrap_or_default())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A python file whose docstring opens at line 2 and closes at line 5, so a
+    /// hunk starting below it can only be coloured with what came before.
+    const FILE: &str = "import os\n\"\"\"\ndoc a\ndoc b\n\"\"\"\n\nx = os.getcwd()\ny = 1\n";
+
+    /// The same change seen twice: once from the top of the file, once from a
+    /// hunk that starts after the docstring opened.
+    const WHOLE: &str = "diff --git a/x.py b/x.py\n@@ -1,8 +1,8 @@\n import os\n \"\"\"\n doc a\n doc b\n \"\"\"\n \n-x = os.getcwd()\n+x = os.getpid()\n y = 1\n";
+    const TAIL: &str = "diff --git a/x.py b/x.py\n@@ -5,4 +5,4 @@\n \"\"\"\n \n-x = os.getcwd()\n+x = os.getpid()\n y = 1\n";
+
+    fn ctx() -> DiffContext {
+        DiffContext {
+            old: Some(Box::new(|| Some(FILE.to_string()))),
+            new: Some(Box::new(|| Some(FILE.to_string()))),
+        }
+    }
+
+    /// The styled pieces of the row carrying `needle`, without the gutters and
+    /// the padding, so two renderings compare wherever the row happens to sit.
+    fn spans_of(d: &RenderedDiff, needle: &str) -> Vec<(String, Style)> {
+        let text = render_prepared(d, 120, 0);
+        text.lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains(needle)))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .filter(|s| !s.content.trim().is_empty())
+                    .map(|s| (s.content.to_string(), s.style))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_hunk_is_coloured_as_if_the_file_was_read_from_its_first_line() {
+        let whole = spans_of(&prepare_diff(WHOLE, DiffContext::default()), "y = 1");
+        let tail = spans_of(&prepare_diff(TAIL, ctx()), "y = 1");
+        let blind = spans_of(&prepare_diff(TAIL, DiffContext::default()), "y = 1");
+        assert_eq!(
+            tail, whole,
+            "a hunk given the lines above it must colour like the whole file"
+        );
+        assert_ne!(
+            blind, whole,
+            "without them the closing \"\"\" reads as an opening one - if this \
+             passes, the comparison above proves nothing"
+        );
+    }
 }

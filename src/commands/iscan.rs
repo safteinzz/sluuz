@@ -14,7 +14,7 @@
 //! Scanning is slow (pickaxe over every commit of every branch of every repo),
 //! so it happens on submit, with the screen showing that it is working.
 
-use crate::git::load::load_diff_raw;
+use crate::git::load::{commit_diff_ctx, load_diff_raw};
 use crate::git::{display_name, find_repos};
 use crate::history::{self, CommitMatch};
 use crate::tui::difftool::{DiffTool, difftool_commit};
@@ -270,7 +270,8 @@ impl App {
         match self.visible.get(self.sel).map(|&i| &self.hits[i]) {
             Some(h) => {
                 let raw = load_diff_raw(&h.repo_path, &h.full, &h.file);
-                self.prepared = prepare_diff(&raw);
+                let ctx = commit_diff_ctx(&h.repo_path, &h.full, &h.file);
+                self.prepared = prepare_diff(&raw, ctx);
                 self.diff = render_prepared(&self.prepared, self.width, 0);
             }
             None => {
