@@ -1,23 +1,13 @@
 //! sluuz - a git superset. Binary: `slu`.
 //!
 //! Every git command passes straight through (`slu commit`, `slu push`, `slu
-//! log`), and these extra verbs add cross-repo / history superpowers:
-//!   slu search <pattern>   Pickaxe a string through all branches/repos
-//!   slu scan   [path]      Audit repositories for leaked secrets
-//!   slu repos  [path]      Working-tree state across all repos under a path
-//!   slu sync   [path]      Fetch (and optionally fast-forward) all repos
-//!   slu tidy   [path]      Find finished branches (upstream gone) across all repos
-//!   slu each   <git args>  Run any git command in every repo
-//!   slu trace              A prettier history view (does not shadow `git log`)
-//!   slu completions <sh>   Print a tab-completion script (reuses git's)
+//! log`), and the extra verbs add cross-repo / history superpowers, each with an
+//! interactive twin that `slu --help` lists as its own group.
 //!
-//! and the interactive twin of each, which `slu --help` lists as its own group:
-//!   slu iscan   [path]     Interactive history search across repos
-//!   slu irepos  [path]     Interactive repo explorer, drilling to a diff
-//!   slu ibranch            Interactive branch explorer
-//!   slu itidy              Interactively delete branches with a gone upstream
-//!   slu ilog    [path…]    Interactive log explorer
-//!   slu istatus            Interactive git status - stage/unstage + diffs
+//! This file is the clap `Cmd` enum, the hand-built help template and the
+//! dispatch match; what you can run is `slu --help`, which renders from the
+//! manifest, those doc comments and `AFTER`, and is the only copy of that
+//! list.
 
 mod app;
 mod commands;
@@ -28,11 +18,18 @@ mod tui;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::process::Command;
 
-/// Shown at the bottom of `slu --help`: the one thing the command list can't
-/// convey - that everything else is just git.
-const PASSTHROUGH: &str = concat!(
-    "Anything else is real git, passed straight through: slu commit -m \"fix\", slu push, slu rebase …
-Run `slu <command> --help` for the full detail of any command.",
+/// Shown at the bottom of `slu --help`: the one shape the command list can't
+/// convey - that everything else is just git - and then what a script can and
+/// cannot expect from stdout.
+const AFTER: &str = concat!(
+    "\
+Ways to run it (not subcommands):
+  slu <git command>   real git, passed straight through (`slu commit -m \"fix\"`, `slu push`)
+
+A passthrough is git itself, so the output and the exit code are git's own.
+sluuz's own verbs print a table for people rather than data, except
+`completions`, whose stdout is the script.
+Run `slu <command> --help` for a command's details.",
     "\n\n",
     env!("CARGO_PKG_REPOSITORY"),
     "\ncontributors: ",
@@ -62,7 +59,7 @@ const LONG_VERSION: &str = concat!(
     version,
     long_version = LONG_VERSION,
     about,
-    after_help = PASSTHROUGH,
+    after_help = AFTER,
     arg_required_else_help = true
 )]
 struct Cli {
@@ -75,60 +72,62 @@ struct Cli {
 // line in `slu --help` instead of being collapsed into the description.
 #[derive(Subcommand)]
 enum Cmd {
-    /// Search history for a string (pickaxe) <pattern>
+    /// Search history for a string (pickaxe)  <PATTERN>
     ///   -r        search every repo under the cwd
     ///   -l N      max commits shown per repo (20)
     #[command(verbatim_doc_comment)]
     Search(commands::search::Args),
-    /// Scan repos for sensitive terms - secrets, tokens [path]
-    ///   -t terms  custom comma-separated terms
+    /// Scan repos for sensitive terms - secrets, tokens  [PATH]
+    ///   -t TERMS  custom comma-separated terms
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Scan(commands::scan::Args),
-    /// Working-tree state across all repos [path]
+    /// Show working-tree state across all repos  [PATH]
     ///   --dirty   only repos needing attention
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Repos(commands::repos::Args),
-    /// Fetch (and optionally fast-forward) all repos [path]
+    /// Fetch (and optionally fast-forward) all repos  [PATH]
     ///   --pull    fast-forward the branch where safe
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Sync(commands::sync::Args),
-    /// Find finished branches (upstream gone), safe to delete [path]
+    /// Find finished branches (upstream gone), safe to delete  [PATH]
     ///   -a        include already-clean repos
     ///   -p        drop remote branches the remote no longer has
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Tidy(commands::tidy::Args),
-    /// Run any git command in every repo  (e.g. slu each pull --ff-only)
+    /// Run any git command in every repo  <ARGS>...
+    ///   slu each pull --ff-only
+    #[command(verbatim_doc_comment)]
     Each(commands::each::Args),
-    /// A prettier history view (aligned log)
+    /// Show a prettier history view (aligned log)
     ///   -a        include all branches
     ///   -g        show git's commit graph
     ///   -n N      max commits (30)
     #[command(verbatim_doc_comment)]
     Trace(commands::trace::Args),
+    /// Print a completion script that reuses git's own  <bash|zsh|fish>
+    ///   --add     append the loader to your shell's rc file for you
+    #[command(verbatim_doc_comment)]
+    Completions(commands::completions::Args),
     /// Manage sluuz itself: `self update` reinstalls, `self check` looks for a newer release
     #[command(name = "self", subcommand)]
     Selfie(commands::selfcmd::Cmd),
-    /// Print a tab-completion script <bash|zsh|fish>
-    ///   --add     append the loader to your shell's rc file for you
-    ///   reuses git's own completion (branches, refs, flags)
-    #[command(verbatim_doc_comment)]
-    Completions(commands::completions::Args),
-    /// Interactive history search across repos (TUI) [path]
+    /// Interactive history search across repos (TUI)  [PATH]
     ///   type terms in the bar, enter runs the search
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Iscan(commands::iscan::Args),
-    /// Interactive repo explorer (TUI) [path]
+    /// Interactive repo explorer (TUI)  [PATH]
     ///   repos → branches → commits → diff, enter drills in
     ///   --dirty   start on repos with uncommitted work
     ///   -d N      directory depth to scan (3)
     #[command(verbatim_doc_comment)]
     Irepos(commands::irepos::Args),
     /// Interactive branch explorer (TUI)
+    ///   every branch with its push state · / narrows them, ? their commits
     ///   -r        remotes only
     ///   -a        local + remote
     #[command(verbatim_doc_comment)]
@@ -137,10 +136,10 @@ enum Cmd {
     ///   this repo · enter → confirm popup → enter deletes
     #[command(verbatim_doc_comment)]
     Itidy(commands::itidy::Args),
-    /// Interactive log explorer (TUI) [path…]
+    /// Interactive log explorer (TUI)  [PATH]...
+    ///   commits on top, the selected commit's diff below
     ///   -a        include all branches
     ///   -n N      commits to load (200)
-    ///   [path…]   only commits touching these paths
     #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
     /// Interactive git status - stage/unstage + diffs (TUI)

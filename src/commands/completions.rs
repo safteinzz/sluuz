@@ -75,7 +75,7 @@ impl Shell {
 #[derive(clap::Args)]
 pub struct Args {
     /// Which shell to print a completion script for
-    #[arg(value_enum)]
+    #[arg(value_enum, value_name = "bash|zsh|fish")]
     pub shell: Shell,
 
     /// Instead of printing, add the loader line to your shell's rc file
