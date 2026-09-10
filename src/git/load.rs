@@ -281,11 +281,16 @@ pub fn stream_files(repo: String, hash: String, paths: Vec<String>, seq: u64, tx
     });
 }
 
+/// How a merge is diffed: against its first parent, as `commit_diff_ctx` reads it.
+/// git's default combined diff lists a cleanly merged file and then shows no
+/// hunks for it, which left the diff pane blank.
+const FIRST_PARENT: &str = "--diff-merges=first-parent";
+
 /// The files a commit touched, with their status (cheap - no diff content).
 /// When `pathspec` is non-empty, only files matching it are returned (so a
 /// path-filtered `ilog` shows just that file's change in each commit).
 pub fn load_files(repo: &str, hash: &str, pathspec: &[&str]) -> Vec<FileEntry> {
-    let mut args = vec!["show", "--name-status", "--format=", hash];
+    let mut args = vec!["show", "--name-status", "--format=", FIRST_PARENT, hash];
     if !pathspec.is_empty() {
         args.push("--");
         args.extend_from_slice(pathspec);
@@ -309,7 +314,7 @@ pub fn load_files(repo: &str, hash: &str, pathspec: &[&str]) -> Vec<FileEntry> {
 /// One file's raw `git show` diff text (fetched once, then re-rendered locally
 /// for scrolling without re-shelling out to git).
 pub fn load_diff_raw(repo: &str, hash: &str, path: &str) -> String {
-    git_capture(repo, &["show", "--format=", hash, "--", path]).unwrap_or_default()
+    git_capture(repo, &["show", "--format=", FIRST_PARENT, hash, "--", path]).unwrap_or_default()
 }
 
 /// One file's whole text at `rev`, untrimmed because indentation is data here.
@@ -329,5 +334,94 @@ pub fn commit_diff_ctx(repo: &str, hash: &str, path: &str) -> DiffContext {
     DiffContext {
         old: Some(side(format!("{hash}^"))),
         new: Some(side(hash.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_diff_raw, load_files};
+    use crate::git::git_capture;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A throwaway repo under the system temp dir, deleted when it goes out of
+    /// scope - including when an assertion panics, so a failing test leaves the
+    /// machine as it found it.
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new(tag: &str) -> TempRepo {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!("sluuz-{tag}-{stamp}"));
+            fs::create_dir_all(&dir).expect("temp dir");
+            let repo = TempRepo(dir);
+            repo.git(&["init", "-q"]);
+            repo
+        }
+
+        fn path(&self) -> &str {
+            self.0.to_str().expect("utf-8 temp path")
+        }
+
+        fn git(&self, args: &[&str]) {
+            git_capture(self.path(), args).unwrap_or_else(|| panic!("git {args:?}"));
+        }
+
+        /// Runs `args` as a named author with signing off, so the machine's own
+        /// git config cannot make a commit or a merge fail.
+        fn as_author(&self, args: &[&str]) {
+            let mut all = vec![
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ];
+            all.extend_from_slice(args);
+            self.git(&all);
+        }
+
+        fn commit(&self, file: &str, text: &str, msg: &str) {
+            fs::write(self.0.join(file), text).expect("write fixture");
+            self.git(&["add", file]);
+            self.as_author(&["commit", "-q", "-m", msg]);
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn every_file_a_merge_lists_has_a_diff_to_show() {
+        // The two sides edit opposite ends of one file, so it merges cleanly:
+        // the case git's default combined diff lists and then prints no hunk for.
+        let repo = TempRepo::new("merge");
+        repo.commit("f.py", "a\nb\nc\nd\ne\nf\ng\n", "base");
+        repo.git(&["checkout", "-q", "-b", "side"]);
+        repo.commit("f.py", "A\nb\nc\nd\ne\nf\ng\n", "edit the top");
+        repo.git(&["checkout", "-q", "-"]);
+        repo.commit("f.py", "a\nb\nc\nd\ne\nf\nG\n", "edit the bottom");
+        repo.as_author(&["merge", "-q", "--no-ff", "--no-edit", "side"]);
+
+        let files = load_files(repo.path(), "HEAD", &[]);
+        assert!(
+            !files.is_empty(),
+            "the merge brought a change in, so it lists a file"
+        );
+        for file in files {
+            assert!(
+                load_diff_raw(repo.path(), "HEAD", &file.path).contains("@@"),
+                "`{}` is listed for the merge but has no hunk to show",
+                file.path
+            );
+        }
     }
 }
