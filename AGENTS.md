@@ -5,8 +5,6 @@ AI-ONLY DOCUMENT. This file exists to give an AI agent the COMPLETE operating pi
 
 Working brief for an AI coding agent, not documentation for people (the README covers that): the rules, invariants and gotchas needed to change this project correctly without rediscovering them.
 
-**What does not belong here.** How to write code - comments, tests, error wording, how to answer, when to commit - is not project knowledge: it comes from `~/dotfiles/development/MYRULES.md`, imported ahead of this file and outranking it. A rule that would be true in any repo is a sign it belongs there instead. Where the two genuinely contradict, ask rather than pick.
-
 ## Hard rules
 - **Never shadow a real git command** - passthrough is the whole premise, so an enhanced view always gets a distinct verb (`trace`, not `log`; the `i` prefix for interactive: `irepos`/`ilog`/`ibranch`/`itag`/`istatus`/`iscan`).
 - Scratch/test git repos go in `test-playground/` (gitignored). Build them there and **leave them** - the user opens them to test the TUIs by hand.
