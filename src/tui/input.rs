@@ -4,6 +4,7 @@
 //! everywhere and a pane title never hand-writes a key name.
 
 use ratatui::crossterm::event::KeyCode;
+use std::time::{Duration, Instant};
 
 /// Key-hint labels shown in pane titles, defined once so every pane reads the
 /// same. `Y_MOVE`/`X_MOVE` are plain vertical/horizontal navigation (arrows and
@@ -40,6 +41,56 @@ pub fn is_left(c: KeyCode) -> bool {
 /// Pan right = l or →.
 pub fn is_right(c: KeyCode) -> bool {
     matches!(c, KeyCode::Char('l') | KeyCode::Right)
+}
+
+/// A gap shorter than this between two presses of one key is the terminal's own
+/// key repeat, not a person tapping: repeats arrive 25-40 times a second, and
+/// nobody taps faster than about eight.
+const REPEAT: Duration = Duration::from_millis(100);
+/// How long a key has to be held for each doubling of the step.
+const RAMP: Duration = Duration::from_millis(500);
+/// The most a single repeat may be multiplied by, so a held key still lands
+/// near where it was let go.
+const MAX_DOUBLINGS: u32 = 3;
+
+/// How far one press of a movement key goes. A tap is one step, so reading a
+/// list or a diff line by line is unchanged; a held key doubles its step for
+/// every `RAMP` it has been held, up to eight, and letting go starts over.
+/// That is what stands in for paging keys, which many keyboards do not have.
+#[derive(Default)]
+pub struct Accel {
+    key: Option<(KeyCode, bool)>,
+    last: Option<Instant>,
+    /// When the terminal started repeating the key, None until it has.
+    held_since: Option<Instant>,
+}
+
+impl Accel {
+    /// Steps to move for this press. Every key event goes through here, so any
+    /// other key in between ends the hold.
+    pub fn steps(&mut self, code: KeyCode, ctrl: bool) -> usize {
+        let now = Instant::now();
+        let repeat = self.key == Some((code, ctrl))
+            && self.last.is_some_and(|t| now.duration_since(t) < REPEAT);
+        self.key = Some((code, ctrl));
+        self.last = Some(now);
+        if !repeat {
+            self.held_since = None;
+            return 1;
+        }
+        let since = *self.held_since.get_or_insert(now);
+        let ramps = (now.duration_since(since).as_millis() / RAMP.as_millis()) as u32;
+        1 << ramps.min(MAX_DOUBLINGS)
+    }
+}
+
+/// `cur` moved `rows` towards either end of a list `len` long, stopping there.
+pub fn stepped(cur: usize, len: usize, down: bool, rows: usize) -> usize {
+    if down {
+        (cur + rows).min(len.saturating_sub(1))
+    } else {
+        cur.saturating_sub(rows)
+    }
 }
 
 /// Fold Ctrl+[ back into Esc. Terminals send Ctrl+[ as the raw ESC byte, but the

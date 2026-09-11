@@ -20,13 +20,15 @@ use crate::history::{self, CommitMatch};
 use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
 use crate::tui::input::{
-    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, char_to_byte, is_back, is_down, is_left, is_open,
-    is_right, is_up, norm_esc,
+    Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, char_to_byte, is_back, is_down, is_left,
+    is_open, is_right, is_up, norm_esc, stepped,
 };
-use crate::tui::widgets::{Modal, diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
+use crate::tui::widgets::{
+    Command, CommandLine, Modal, NOTE, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
+    list_scrollbar, pane_block, scope_tabs,
+};
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
-    push_keyboard_enhancement,
+    clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -36,12 +38,12 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-/// Rows a Ctrl-j/k moves the diff, columns a Ctrl-h/l pans it, and the
-/// PgUp/PgDn jump.
+/// Rows a Ctrl-j/k moves the diff and columns a Ctrl-h/l pans it, before a held
+/// key multiplies them.
 const SCROLL_STEP: u16 = 3;
 const PAN_STEP: u16 = 8;
-const PAGE_STEP: u16 = 10;
 
 /// Shown as the bar's placeholder, and used when the bar is submitted empty:
 /// the terms a secret audit usually wants.
@@ -118,10 +120,16 @@ struct App {
     diff: Text<'static>,
     diff_scroll: u16,
     diff_hscroll: u16,
-    msg: Option<String>,
+    /// A difftool result, in the footer in place of the keys until `NOTE` is up.
+    note: Option<(bool, String)>,
+    command: Option<CommandLine>,
+    note_at: Instant,
+    /// Rows the diff pane showed on the last frame, which a scroll is clamped to.
+    diff_rows: u16,
     /// A message that has to be read before anything else happens: it owns
     /// every key until it is dismissed.
     modal: Option<Modal>,
+    accel: Accel,
 }
 
 pub fn run(args: Args) {
@@ -150,8 +158,12 @@ pub fn run(args: Args) {
         diff: Text::default(),
         diff_scroll: 0,
         diff_hscroll: 0,
-        msg: None,
+        note: None,
+        command: None,
+        note_at: Instant::now(),
+        diff_rows: 1,
         modal: None,
+        accel: Accel::default(),
     };
 
     let mut terminal = ratatui::init();
@@ -180,6 +192,15 @@ impl App {
                 continue;
             }
 
+            // A note gives the footer back to the keys on its own, when it is
+            // due; with none up the loop blocks on the key.
+            if let Some(left) = self.note_left()
+                && !event::poll(left)?
+            {
+                self.note = None;
+                continue;
+            }
+
             let Event::Key(key) = event::read()? else {
                 let w = pane_width(terminal);
                 if w != self.width {
@@ -205,7 +226,36 @@ impl App {
                 }
                 continue;
             }
-            self.msg = None;
+            self.note = None;
+
+            // An open `:` line owns every key until it is run or dropped.
+            if let Some(cmd) = &mut self.command {
+                match cmd.on_key(code) {
+                    Typed::Open => {}
+                    Typed::Cancel => self.command = None,
+                    Typed::Run(run) => {
+                        self.command = None;
+                        match run {
+                            Command::Help => {
+                                self.modal = Some(Modal::reader("keys · scan", &help()))
+                            }
+                            Command::Quit => break,
+                            Command::Unknown(what) => {
+                                self.note = Some((
+                                    false,
+                                    format!("unknown command `{what}` · :help lists the keys"),
+                                ));
+                                self.note_at = Instant::now();
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if self.mode == Mode::Browsing && code == KeyCode::Char(':') {
+                self.command = Some(CommandLine::default());
+                continue;
+            }
 
             let quit = if self.mode == Mode::Editing {
                 self.edit_key(code, ctrl)
@@ -216,14 +266,17 @@ impl App {
                 break;
             }
             if self.mode == Mode::Browsing {
-                self.diff_scroll = clamp_scroll(
-                    self.diff_scroll,
-                    self.diff.lines.len(),
-                    pane_height(terminal),
-                );
+                self.diff_scroll =
+                    clamp_scroll(self.diff_scroll, self.diff.lines.len(), self.diff_rows);
             }
         }
         Ok(())
+    }
+
+    fn note_left(&self) -> Option<Duration> {
+        self.note
+            .as_ref()
+            .map(|_| NOTE.saturating_sub(self.note_at.elapsed()))
     }
 
     /// Pickaxe every repo under `base` for what the bar says, then show what it
@@ -311,7 +364,7 @@ impl App {
 
     /// Moving through what the scan found, with the hit's diff below it.
     fn browse_key(&mut self, code: KeyCode, ctrl: bool, terminal: &mut DefaultTerminal) -> bool {
-        let half = half_page(terminal);
+        let steps = self.accel.steps(code, ctrl);
         let mut moved = false;
 
         if matches!(code, KeyCode::Char('q')) || is_back(code) {
@@ -319,32 +372,28 @@ impl App {
         } else if matches!(code, KeyCode::Char('/') | KeyCode::Char('i')) {
             self.mode = Mode::Editing;
         } else if ctrl && is_down(code) {
-            self.diff_scroll = self.diff_scroll.saturating_add(SCROLL_STEP);
+            let by = SCROLL_STEP.saturating_mul(steps as u16);
+            self.diff_scroll = self.diff_scroll.saturating_add(by);
         } else if ctrl && is_up(code) {
-            self.diff_scroll = self.diff_scroll.saturating_sub(SCROLL_STEP);
-        } else if ctrl && code == KeyCode::Char('d') {
-            self.diff_scroll = self.diff_scroll.saturating_add(half);
-        } else if ctrl && code == KeyCode::Char('u') {
-            self.diff_scroll = self.diff_scroll.saturating_sub(half);
+            let by = SCROLL_STEP.saturating_mul(steps as u16);
+            self.diff_scroll = self.diff_scroll.saturating_sub(by);
         } else if ctrl && is_right(code) {
             self.diff_hscroll = clamp_hscroll(
-                self.diff_hscroll.saturating_add(PAN_STEP),
+                self.diff_hscroll
+                    .saturating_add(PAN_STEP.saturating_mul(steps as u16)),
                 self.prepared.max_line(),
                 self.prepared.cell_width(self.width),
             );
             self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
         } else if ctrl && is_left(code) {
-            self.diff_hscroll = self.diff_hscroll.saturating_sub(PAN_STEP);
+            self.diff_hscroll = self
+                .diff_hscroll
+                .saturating_sub(PAN_STEP.saturating_mul(steps as u16));
             self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
-        } else if code == KeyCode::PageDown {
-            self.diff_scroll = self.diff_scroll.saturating_add(PAGE_STEP);
-        } else if code == KeyCode::PageUp {
-            self.diff_scroll = self.diff_scroll.saturating_sub(PAGE_STEP);
-        } else if is_down(code) && self.sel + 1 < self.visible.len() {
-            self.sel += 1;
-            moved = true;
-        } else if is_up(code) && self.sel > 0 {
-            self.sel -= 1;
+        } else if (is_down(code) || is_up(code))
+            && stepped(self.sel, self.visible.len(), is_down(code), steps) != self.sel
+        {
+            self.sel = stepped(self.sel, self.visible.len(), is_down(code), steps);
             moved = true;
         } else if !ctrl && is_left(code) && self.scope_idx > 0 {
             self.scope_idx -= 1;
@@ -362,7 +411,10 @@ impl App {
             self.width = pane_width(terminal);
             match outcome {
                 DiffTool::Quiet => {}
-                DiffTool::Note(m) => self.msg = Some(m),
+                DiffTool::Note(m) => {
+                    self.note = Some((false, m));
+                    self.note_at = Instant::now();
+                }
                 DiffTool::Failed(modal) => self.modal = Some(modal),
             }
         }
@@ -376,6 +428,20 @@ impl App {
 
 /// Byte offset of character index `idx`, so inserts and deletes stay safe on
 /// multi-byte input.
+/// Every key the results answer to, for the box `:help` opens.
+fn help() -> Vec<(String, String)> {
+    let row = |k: &str, d: &str| (k.to_string(), d.to_string());
+    vec![
+        row(Y_MOVE, "move through the hits (hold to speed up)"),
+        row(X_MOVE, "switch tab: all hits, or one term's"),
+        row(CTRL_Y_MOVE, "scroll the diff"),
+        row(CTRL_X_MOVE, "pan it sideways"),
+        row("/", "edit the terms"),
+        row("enter", "open the file in your git difftool"),
+        row("q", "quit"),
+    ]
+}
+
 /// Split the bar's text into terms: comma-separated, trimmed, empties dropped.
 fn parse_terms(query: &str) -> Vec<String> {
     query
@@ -444,18 +510,19 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         Constraint::Length(3),
         Constraint::Percentage(42),
         Constraint::Min(5),
+        Constraint::Length(1),
     ])
     .split(frame.area());
+    app.diff_rows = areas[2].height.saturating_sub(2).max(1);
 
     // ── query bar ──
     let editing = app.mode == Mode::Editing;
-    let label = "scan terms (comma separated)";
     let bar_hint = if app.pending {
-        format!(" {label} · working… ")
+        " scan terms (comma separated)   working… "
     } else if editing {
-        format!(" {label} · enter run · esc back ")
+        " scan terms (comma separated) "
     } else {
-        format!(" {label} · / edit ")
+        " scan terms (comma separated)   / edit "
     };
     // Empty bar shows the defaults dimmed; submitting empty runs exactly those.
     let bar_line = if app.query.is_empty() {
@@ -487,24 +554,30 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         .iter()
         .map(|&i| hit_item(&app.hits[i]))
         .collect();
-    let scope = if app.scope_idx == 0 || app.terms.is_empty() {
-        "all terms".to_string()
-    } else {
-        app.terms[app.scope_idx - 1].clone()
-    };
+    // One tab per term the search ran with, after `all`: sliding to one keeps
+    // only the hits that term found.
+    let mut stops = vec!["all"];
+    stops.extend(app.terms.iter().map(String::as_str));
+    let tabs = scope_tabs(&stops, app.scope_idx);
     let title = if app.pending {
-        " searching every branch of every repo… ".to_string()
+        Line::from(" searching every branch of every repo… ")
     } else if !app.searched {
-        " type terms above, or press enter for the defaults ".to_string()
-    } else if app.visible.is_empty() {
-        format!(" no hits · {scope} ·  / edit · q quit ")
+        Line::from(" type terms above, or press enter for the defaults ")
     } else {
-        format!(
-            " hits · {scope}  {}/{} of {}   {Y_MOVE} · {X_MOVE} term · / edit · q quit ",
-            app.sel + 1,
-            app.visible.len(),
-            app.hits.len()
-        )
+        let tail = if app.visible.is_empty() {
+            " no hits ".to_string()
+        } else {
+            format!(
+                " {}/{} of {} ",
+                app.sel + 1,
+                app.visible.len(),
+                app.hits.len()
+            )
+        };
+        let mut spans = vec![Span::raw(" hits ")];
+        spans.extend(tabs);
+        spans.push(Span::raw(tail));
+        Line::from(spans)
     };
     let list = List::new(items)
         .block(pane_block(title, !editing))
@@ -518,12 +591,10 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         Some(h) => format!("{}  {}  {}", h.short, h.subject, h.file),
         None => String::new(),
     };
-    let dtitle = match &app.msg {
-        Some(m) => format!(" ⚠ {m} "),
-        None if subtitle.is_empty() => " (nothing to show) ".to_string(),
-        None => {
-            format!(" {subtitle}   enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan ")
-        }
+    let dtitle = if subtitle.is_empty() {
+        " (nothing to show) ".to_string()
+    } else {
+        format!(" {subtitle} ")
     };
     let diff = Paragraph::new(app.diff.clone())
         .block(pane_block(dtitle, !editing))
@@ -537,6 +608,25 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         app.prepared.max_line(),
         cell,
         app.diff_hscroll,
+    );
+
+    // While the bar has the keys, `:` is a character like any other, so the
+    // footer does not offer `:help` there.
+    let actions: Vec<String> = if editing {
+        let out = if app.searched { "esc back" } else { "esc quit" };
+        vec!["enter run".to_string(), out.to_string()]
+    } else {
+        vec!["enter difftool".to_string(), "q quit".to_string()]
+    };
+    frame.render_widget(
+        key_footer(
+            &actions,
+            app.note.as_ref(),
+            app.command.as_ref(),
+            !editing,
+            areas[3].width,
+        ),
+        areas[3],
     );
 
     if let Some(modal) = &mut app.modal {

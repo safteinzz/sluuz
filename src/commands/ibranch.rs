@@ -2,9 +2,10 @@
 //! drill, entered directly: this repo's branches, their commits, and the diffs
 //! under those.
 //!
-//! Branches (top, j/k) preview their commits below (Ctrl-j/k); `h`/`l` slide the
-//! scope between local, all, and remote. Enter drills into the commits level,
-//! Esc quits, since this is where the app was entered. See `app/` for the rest.
+//! Branches (top, j/k) preview their commits below (Ctrl-j/k); `h`/`l` move
+//! between the local, remote and gone tabs. `d` deletes, `s`/`S` sync. Enter
+//! drills into the commits level, Esc quits, since this is where the app was
+//! entered. See `app/` for the rest.
 //!
 //! Push state is visible at a glance: a branch marked `↑` has no remote yet (or
 //! its upstream is gone / it's ahead); commits marked `↑` aren't pushed anywhere.
@@ -15,11 +16,11 @@ use std::io::{self, IsTerminal};
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Start in the "all" scope (local + remote-tracking branches)
+    /// Start on the finished branches (upstream gone)
     #[arg(short, long)]
-    pub all: bool,
+    pub gone: bool,
 
-    /// Start in the "remote" scope (remote-tracking branches only)
+    /// Start on the remote-tracking branches
     #[arg(short, long)]
     pub remotes: bool,
 }
@@ -37,7 +38,7 @@ pub fn run(args: Args) {
     let repo =
         git_capture(".", &["rev-parse", "--show-toplevel"]).unwrap_or_else(|| ".".to_string());
 
-    match App::at_branches(repo, branch_scope(args.all, args.remotes)) {
+    match App::at_branches(repo, branch_scope(args.gone, args.remotes)) {
         Some(app) => app.run("ibranch"),
         None => eprintln!("no branches (or not a git repo)"),
     }

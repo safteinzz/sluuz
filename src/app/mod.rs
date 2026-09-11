@@ -2,7 +2,9 @@
 //!
 //! One app with one level stack, entered at whichever level the command asked
 //! for. `slu irepos` starts at Repos, `slu ibranch` at Branches, `slu ilog` at
-//! Commits; Esc walks back up and quits at the level it was entered on.
+//! Commits; Esc walks back up and quits at the level it was entered on. `slu
+//! itag` starts at Tags, which stands where Branches would: a tag's commits
+//! step back to it.
 //!
 //! Every screen is two panes: the current level's list on top, the level below
 //! it underneath, so the bottom pane always previews where Enter goes. Plain
@@ -10,19 +12,21 @@
 
 mod branches;
 mod commits;
+mod delete;
 mod diff;
 mod keys;
 mod repos;
+mod tags;
 mod ui;
 
 pub use branches::Branch;
 
 use crate::git::RepoStatus;
-use crate::git::load::{Batch, Commit, FileEntry};
+use crate::git::load::{self, Batch, Commit, FileEntry, RemoteTags, Tag};
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::highlight::RenderedDiff;
-use crate::tui::input::char_to_byte;
-use crate::tui::widgets::Modal;
+use crate::tui::input::{Accel, char_to_byte, stepped};
+use crate::tui::widgets::{CommandLine, Modal, NOTE};
 use crate::tui::{pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -55,16 +59,20 @@ const SLOW: Duration = Duration::from_millis(120);
 pub enum Level {
     Repos,
     Branches,
+    Tags,
     Commits,
     Diff,
 }
 
 impl Level {
-    /// The level Esc steps back to, or None at the top of the stack.
-    fn back(self) -> Option<Level> {
+    /// The level Esc steps back to from here, in an app entered at `start`, or
+    /// None at the top of the stack. Only `itag` enters at Tags, and nothing
+    /// sits above them.
+    fn back(self, start: Level) -> Option<Level> {
         match self {
-            Level::Repos => None,
+            Level::Repos | Level::Tags => None,
             Level::Branches => Some(Level::Repos),
+            Level::Commits if start == Level::Tags => Some(Level::Tags),
             Level::Commits => Some(Level::Branches),
             Level::Diff => Some(Level::Commits),
         }
@@ -166,26 +174,6 @@ impl Sel {
         self.visible.get(self.cur).copied()
     }
 
-    /// Move the cursor one row, returning whether it actually moved (so the
-    /// caller only reloads the pane below when something changed).
-    fn step(&mut self, down: bool) -> bool {
-        let moved = if down {
-            self.cur + 1 < self.visible.len() && {
-                self.cur += 1;
-                true
-            }
-        } else {
-            self.cur > 0 && {
-                self.cur -= 1;
-                true
-            }
-        };
-        if moved {
-            self.state.select(Some(self.cur));
-        }
-        moved
-    }
-
     /// Put the cursor on the row a refresh was standing on, now that it has
     /// turned up among the rows that arrived.
     fn restored_at(&mut self, at: usize) {
@@ -208,16 +196,11 @@ impl Sel {
 
     /// Move the cursor `rows` at a time, stopping at either end. Returns
     /// whether it actually moved, so the caller reloads only when it did.
-    fn jump(&mut self, down: bool, rows: usize) -> bool {
+    fn step(&mut self, down: bool, rows: usize) -> bool {
         if self.visible.is_empty() {
             return false;
         }
-        let last = self.visible.len() - 1;
-        let to = if down {
-            (self.cur + rows).min(last)
-        } else {
-            self.cur.saturating_sub(rows)
-        };
+        let to = stepped(self.cur, self.visible.len(), down, rows);
         if to == self.cur {
             return false;
         }
@@ -305,11 +288,29 @@ pub struct App {
     start: Level,
     enhanced: bool,
     width: u16,
-    /// Transient status line (a difftool complaint, mostly).
-    msg: Option<String>,
+    /// What the last action came to, green when it worked and yellow when it
+    /// did not, in the footer in place of the key hints until `NOTE` is up.
+    note: Option<(bool, String)>,
+    note_at: Instant,
+    /// Rows the diff pane showed on the last frame, which is what a scroll is
+    /// clamped to.
+    diff_rows: u16,
     /// A message that has to be read before anything else happens: it owns
     /// every key until it is dismissed.
     modal: Option<Modal>,
+    /// A `d` waiting on Yes or No, which owns every key the same way.
+    confirm: Option<delete::Confirm>,
+    /// `s` or `S` was pressed (`Some(pull)`). The sync runs after the frame
+    /// that says so is drawn, or the screen would freeze for a network round
+    /// trip with no word why.
+    sync_next: Option<bool>,
+    /// A delete on a remote waiting for the same frame, for the same reason.
+    delete_next: Option<delete::Target>,
+    /// What `u` would put back.
+    undo: Option<delete::Undo>,
+    /// The `:` line while one is open. It owns every key until it is run or
+    /// dropped.
+    command: Option<CommandLine>,
     /// The pane below the cursor is out of date. A cursor move only sets this,
     /// so a held `j` scrolls at the speed of the terminal and the git call it
     /// would have made is asked for once, when the keys stop coming.
@@ -317,6 +318,7 @@ pub struct App {
     /// The pane whose filter is being typed into, if any. It owns every key
     /// until Enter keeps it or Esc clears it.
     editing: Option<Pane>,
+    accel: Accel,
     /// Rows from the background loads land here; the drawing loop drains it
     /// once a frame.
     tx: Sender<Batch>,
@@ -337,6 +339,21 @@ pub struct App {
     branches: Vec<Branch>,
     bsel: Sel,
     bfeed: Feed,
+
+    // ── tags level ──────────────────────────────────────────────────────────
+    tags: Vec<Tag>,
+    tsel: Sel,
+    /// The remote's answer about its tags, None while it is being asked.
+    remote: Option<RemoteTags>,
+    /// The remote tags are compared against, and whether this repo has git
+    /// keep a copy of its tags.
+    tag_remote: Option<String>,
+    tracked: bool,
+    rfeed: Feed,
+    /// The tag whose commits the commits pane holds, and what they are
+    /// counted from.
+    range_tag: String,
+    since: tags::Since,
 
     // ── commits level ───────────────────────────────────────────────────────
     commits: Vec<Commit>,
@@ -378,10 +395,18 @@ impl App {
             start,
             enhanced: false,
             width: 120,
-            msg: None,
+            note: None,
+            note_at: Instant::now(),
+            diff_rows: 1,
             modal: None,
+            confirm: None,
+            sync_next: None,
+            delete_next: None,
+            undo: None,
+            command: None,
             pending: false,
             editing: None,
+            accel: Accel::default(),
             tx,
             rx,
             repos: Vec::new(),
@@ -392,6 +417,14 @@ impl App {
             branches: Vec::new(),
             bsel: Sel::scoped(branches::DEFAULT_SCOPE),
             bfeed: Feed::default(),
+            tags: Vec::new(),
+            tsel: Sel::scoped(tags::DEFAULT_SCOPE),
+            remote: None,
+            tag_remote: None,
+            tracked: false,
+            rfeed: Feed::default(),
+            range_tag: String::new(),
+            since: tags::Since::Asking,
             commits: Vec::new(),
             csel: Sel::scoped(commits::DEFAULT_SCOPE),
             cfeed: Feed::default(),
@@ -438,6 +471,21 @@ impl App {
         }
         app.rescope_branches();
         app.enter_branch();
+        Some(app)
+    }
+
+    /// `slu itag`: the tags of the repo we are standing in, marked against its
+    /// remote once that answers. Returns None when it has no tags.
+    pub fn at_tags(repo: String) -> Option<App> {
+        let mut app = App::new(Level::Tags, repo);
+        app.load_tags();
+        if app.tags.is_empty() {
+            return None;
+        }
+        app.tag_remote = load::tag_remote(&app.repo);
+        app.rescope_tags();
+        app.request_remote_tags(true);
+        app.enter_tag();
         Some(app)
     }
 
@@ -491,11 +539,34 @@ impl App {
                 self.settle();
             }
             terminal.draw(|frame| ui::draw(frame, self))?;
+            if let Some(pull) = self.sync_next.take() {
+                if self.level == Level::Repos {
+                    self.sync_all(pull);
+                } else {
+                    self.sync(pull);
+                }
+                continue;
+            }
+            if let Some(target) = self.delete_next.take() {
+                self.delete_on_remote(target);
+                continue;
+            }
 
             // While rows are still arriving, come back on a frame timer to show
-            // them. With nothing in flight there is nothing to wake for, so the
-            // loop blocks on the key and leaves the CPU alone.
-            if self.filling() && !event::poll(FRAME)? {
+            // them, and while a note is up, come back when it is due to go. With
+            // neither there is nothing to wake for, so the loop blocks on the key
+            // and leaves the CPU alone.
+            let wait = match (self.filling(), self.note_left()) {
+                (true, Some(left)) => Some(left.min(FRAME)),
+                (true, None) => Some(FRAME),
+                (false, left) => left,
+            };
+            if let Some(wait) = wait
+                && !event::poll(wait)?
+            {
+                if self.note_left() == Some(Duration::ZERO) {
+                    self.note = None;
+                }
                 continue;
             }
             match event::read()? {
@@ -519,10 +590,32 @@ impl App {
         Ok(())
     }
 
+    /// Something worked: green in the footer.
+    fn set_status(&mut self, text: impl Into<String>) {
+        self.note = Some((true, text.into()));
+        self.note_at = Instant::now();
+    }
+
+    /// Something did not, with nothing more to read than one line: yellow.
+    fn set_failed(&mut self, text: impl Into<String>) {
+        self.note = Some((false, text.into()));
+        self.note_at = Instant::now();
+    }
+
+    fn note_left(&self) -> Option<Duration> {
+        self.note
+            .as_ref()
+            .map(|_| NOTE.saturating_sub(self.note_at.elapsed()))
+    }
+
     /// Is any pane still being streamed into? While one is, the loop comes back
     /// on a frame timer to show what has arrived.
     fn filling(&self) -> bool {
-        self.bfeed.loading || self.cfeed.loading || self.ffeed.loading || self.dfeed.loading()
+        self.bfeed.loading
+            || self.rfeed.loading
+            || self.cfeed.loading
+            || self.ffeed.loading
+            || self.dfeed.loading()
     }
 
     /// Take everything the background loads have produced since the last frame.
@@ -564,6 +657,19 @@ impl App {
                         self.ffeed.loading = false;
                     }
                 }
+                Batch::TagBase { seq, prev } => {
+                    if !self.cfeed.accepts(seq) {
+                        continue;
+                    }
+                    self.since = prev.map_or(tags::Since::Start, tags::Since::Tag);
+                }
+                Batch::RemoteTags { seq, answer } => {
+                    if !self.rfeed.accepts(seq) {
+                        continue;
+                    }
+                    self.rfeed.loading = false;
+                    self.apply_remote(answer);
+                }
             }
         }
         if let Some(prepared) = self.dfeed.take() {
@@ -584,6 +690,7 @@ impl App {
         match self.level {
             Level::Repos => self.enter_repo(),
             Level::Branches => self.enter_branch(),
+            Level::Tags => self.enter_tag(),
             Level::Commits => self.enter_commit(),
             Level::Diff => {}
         }
@@ -595,7 +702,10 @@ impl App {
         Some(match (self.level, pane) {
             (Level::Repos, Pane::Top) => &mut self.rsel,
             (Level::Repos, Pane::Bottom) | (Level::Branches, Pane::Top) => &mut self.bsel,
-            (Level::Branches, Pane::Bottom) | (Level::Commits, Pane::Top) => &mut self.csel,
+            (Level::Tags, Pane::Top) => &mut self.tsel,
+            (Level::Branches | Level::Tags, Pane::Bottom) | (Level::Commits, Pane::Top) => {
+                &mut self.csel
+            }
             (Level::Commits, Pane::Bottom) => &mut self.fsel,
             (Level::Diff, _) => return None,
         })
@@ -617,7 +727,10 @@ impl App {
         match (self.level, pane) {
             (Level::Repos, Pane::Top) => self.rescope_repos(),
             (Level::Repos, Pane::Bottom) | (Level::Branches, Pane::Top) => self.rescope_branches(),
-            (Level::Branches, Pane::Bottom) | (Level::Commits, Pane::Top) => self.rescope_commits(),
+            (Level::Tags, Pane::Top) => self.rescope_tags(),
+            (Level::Branches | Level::Tags, Pane::Bottom) | (Level::Commits, Pane::Top) => {
+                self.rescope_commits()
+            }
             (Level::Commits, Pane::Bottom) => self.rescope_files(),
             (Level::Diff, _) => {}
         }
@@ -653,6 +766,15 @@ impl App {
                 self.request_branches();
                 self.pending = true;
             }
+            // The remote is asked again too: a tag pushed from another terminal
+            // is exactly what `r` is pressed to see.
+            Level::Tags => {
+                self.tsel.restore = self.tag_name().map(str::to_string);
+                self.load_tags();
+                self.rescope_tags();
+                self.request_remote_tags(true);
+                self.pending = true;
+            }
             Level::Commits => {
                 // Read the push state again *before* the log: the commits about
                 // to arrive are tested against this set, and a commit made since
@@ -671,7 +793,7 @@ impl App {
 
     /// Esc: step back one level, or quit if this is where we came in.
     fn back(&mut self) -> bool {
-        match self.level.back() {
+        match self.level.back(self.start) {
             Some(prev) if self.level > self.start => {
                 self.level = prev;
                 false
@@ -681,20 +803,32 @@ impl App {
     }
 }
 
-/// Starting stop on the branch scope slider for `slu ibranch`'s `-a`/`-r`.
-pub fn branch_scope(all: bool, remotes: bool) -> usize {
-    if remotes && !all {
-        2
-    } else if all {
-        1
+/// Starting tab for `slu ibranch`'s `-g`/`-r`.
+pub fn branch_scope(gone: bool, remotes: bool) -> usize {
+    let wanted = if gone {
+        branches::Scope::Gone
+    } else if remotes {
+        branches::Scope::Remote
     } else {
-        branches::DEFAULT_SCOPE
-    }
+        branches::Scope::Local
+    };
+    branches::SCOPES
+        .iter()
+        .position(|&s| s == wanted)
+        .unwrap_or(branches::DEFAULT_SCOPE)
 }
 
 /// Starting stop on the repo scope slider for `slu irepos --dirty`.
 pub fn repo_scope(dirty: bool) -> usize {
-    if dirty { 0 } else { repos::DEFAULT_SCOPE }
+    let wanted = if dirty {
+        repos::Scope::Dirty
+    } else {
+        repos::Scope::All
+    };
+    repos::SCOPES
+        .iter()
+        .position(|&s| s == wanted)
+        .unwrap_or(repos::DEFAULT_SCOPE)
 }
 
 #[cfg(test)]
@@ -828,20 +962,27 @@ mod tests {
             is_head: false,
             remote,
             name: "b".into(),
+            refname: "refs/heads/b".into(),
             rel: String::new(),
             author: String::new(),
             has_upstream: upstream,
+            upstream: if upstream {
+                "origin/b".into()
+            } else {
+                String::new()
+            },
             track: track.into(),
         }
     }
 
     #[test]
     fn esc_steps_back_one_level_at_a_time() {
-        assert_eq!(Level::Diff.back(), Some(Level::Commits));
-        assert_eq!(Level::Commits.back(), Some(Level::Branches));
-        assert_eq!(Level::Branches.back(), Some(Level::Repos));
+        let start = Level::Repos;
+        assert_eq!(Level::Diff.back(start), Some(Level::Commits));
+        assert_eq!(Level::Commits.back(start), Some(Level::Branches));
+        assert_eq!(Level::Branches.back(start), Some(Level::Repos));
         // Nothing above the repos level, so Esc there quits.
-        assert_eq!(Level::Repos.back(), None);
+        assert_eq!(Level::Repos.back(start), None);
     }
 
     #[test]
@@ -858,9 +999,9 @@ mod tests {
     fn the_cursor_stops_at_both_ends() {
         let mut sel = Sel::default();
         sel.show(vec![0, 1]);
-        assert!(!sel.step(false), "already at the top");
-        assert!(sel.step(true));
-        assert!(!sel.step(true), "already at the bottom");
+        assert!(!sel.step(false, 1), "already at the top");
+        assert!(sel.step(true, 1));
+        assert!(!sel.step(true, 1), "already at the bottom");
         assert_eq!(sel.cur, 1);
     }
 
@@ -870,39 +1011,39 @@ mod tests {
         sel.show(Vec::new());
         assert!(sel.is_empty());
         assert_eq!(sel.idx(), None);
-        assert!(!sel.step(true));
+        assert!(!sel.step(true, 1));
     }
 
     #[test]
     fn the_cursor_indexes_the_underlying_list_not_the_filtered_one() {
         let mut sel = Sel::default();
         sel.show(vec![3, 7]); // a scope that kept entries 3 and 7
-        sel.step(true);
+        sel.step(true, 1);
         assert_eq!(sel.idx(), Some(7));
     }
 
     #[test]
-    fn paging_stops_at_both_ends() {
-        // `PageUp`/`PageDown` and `Ctrl-d`/`Ctrl-u` move by a pane's worth, and
-        // a jump past either end has to land on the end rather than wrap or
-        // saturate the cursor out of the list.
+    fn a_held_key_stops_at_both_ends() {
+        // A held key moves several rows a press, and one that would carry past
+        // either end has to land on the end rather than wrap or saturate the
+        // cursor out of the list.
         let mut sel = Sel::default();
         sel.show((0..10).collect());
-        assert!(sel.jump(true, 4));
+        assert!(sel.step(true, 4));
         assert_eq!(sel.cur, 4);
-        assert!(sel.jump(true, 99), "a jump past the bottom still moves");
+        assert!(sel.step(true, 99), "a step past the bottom still moves");
         assert_eq!(sel.cur, 9);
-        assert!(!sel.jump(true, 4), "already on the last row");
-        assert!(sel.jump(false, 99));
+        assert!(!sel.step(true, 4), "already on the last row");
+        assert!(sel.step(false, 99));
         assert_eq!(sel.cur, 0);
-        assert!(!sel.jump(false, 1), "already on the first row");
+        assert!(!sel.step(false, 1), "already on the first row");
     }
 
     #[test]
-    fn an_empty_list_cannot_be_paged() {
+    fn an_empty_list_cannot_be_stepped() {
         let mut sel = Sel::default();
         sel.show(Vec::new());
-        assert!(!sel.jump(true, 5));
+        assert!(!sel.step(true, 5));
         assert_eq!(sel.idx(), None);
     }
 
@@ -913,8 +1054,8 @@ mod tests {
         // yanking the selection back as batches land.
         let mut sel = Sel::default();
         sel.show(vec![0, 1, 2]);
-        sel.step(true);
-        sel.step(true);
+        sel.step(true, 1);
+        sel.step(true, 1);
         assert_eq!(sel.idx(), Some(2));
         sel.append(vec![3, 4, 5]);
         assert_eq!(sel.idx(), Some(2), "the cursor stayed where it was put");
@@ -984,7 +1125,6 @@ mod tests {
         assert!(BranchScope::Local.keeps(&branch(false, true, "")));
         assert!(!BranchScope::Local.keeps(&branch(true, false, "")));
         assert!(BranchScope::Remote.keeps(&branch(true, false, "")));
-        assert!(BranchScope::All.keeps(&branch(true, false, "")));
     }
 
     #[test]

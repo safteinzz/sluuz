@@ -127,15 +127,15 @@ enum Cmd {
     #[command(verbatim_doc_comment)]
     Irepos(commands::irepos::Args),
     /// Interactive branch explorer (TUI)
-    ///   every branch with its push state · / narrows them, ? their commits
-    ///   -r        remotes only
-    ///   -a        local + remote
+    ///   every branch with its push state · d deletes, s/S sync
+    ///   -g        start on the finished ones (upstream gone)
+    ///   -r        start on the remote's
     #[command(verbatim_doc_comment)]
     Ibranch(commands::ibranch::Args),
-    /// Interactively delete branches whose upstream is gone (TUI)
-    ///   this repo · enter → confirm popup → enter deletes
+    /// Interactive tag explorer (TUI)
+    ///   every tag against the remote · enter opens what went into it, d deletes
     #[command(verbatim_doc_comment)]
-    Itidy(commands::itidy::Args),
+    Itag(commands::itag::Args),
     /// Interactive log explorer (TUI)  [PATH]...
     ///   commits on top, the selected commit's diff below
     ///   -a        include all branches
@@ -143,7 +143,7 @@ enum Cmd {
     #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
     /// Interactive git status - stage/unstage + diffs (TUI)
-    ///   this repo · ←→/hl scope · s/u/space stage
+    ///   this repo · ←→/hl tabs · s/u/space stage
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),
     /// Any other command is passed straight through to git
@@ -171,12 +171,12 @@ fn main() {
         Cmd::Repos(args) => commands::repos::run(args),
         Cmd::Sync(args) => commands::sync::run(args),
         Cmd::Tidy(args) => commands::tidy::run(args),
-        Cmd::Itidy(args) => commands::itidy::run(args),
         Cmd::Each(args) => commands::each::run(args),
         Cmd::Trace(args) => commands::trace::run(args),
         Cmd::Ilog(args) => commands::ilog::run(args),
         Cmd::Irepos(args) => commands::irepos::run(args),
         Cmd::Ibranch(args) => commands::ibranch::run(args),
+        Cmd::Itag(args) => commands::itag::run(args),
         Cmd::Iscan(args) => commands::iscan::run(args),
         Cmd::Istatus(args) => commands::istatus::run(args),
         Cmd::Selfie(cmd) => commands::selfcmd::run(cmd),
@@ -187,7 +187,7 @@ fn main() {
 
 /// `slu --help` with the commands split in two: the ones that print and exit,
 /// then the ones that take over the terminal. The pairs line up across the two
-/// groups (`scan`/`iscan`, `repos`/`irepos`, `trace`/`ilog`, `tidy`/`itidy`),
+/// groups (`scan`/`iscan`, `repos`/`irepos`, `trace`/`ilog`, `tag`/`itag`),
 /// which is the shape of the tool.
 fn help_template(cmd: &clap::Command) -> String {
     let subs: Vec<&clap::Command> = cmd.get_subcommands().filter(|c| !c.is_hide_set()).collect();

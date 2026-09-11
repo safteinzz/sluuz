@@ -1,5 +1,5 @@
-# History: the aligned log, then the full-screen browser with a real side-by-side
-# diff under it.
+# History: the browser with a real side-by-side diff under it. The plain
+# `slu trace` is a still, from plain.tape.
 #
 #   ./render.sh history
 #
@@ -29,19 +29,7 @@ Sleep 2s
 Type "cd edge-proxy && clear"
 Enter
 Sleep 600ms
-Show
-Sleep 400ms
-
-# ---- a log you can read ---------------------------------------------------
-Type "slu trace -a"
-Enter
-Sleep 3.2s
-
-# ---- and the same history with the diffs attached -------------------------
-Hide
-Type "clear"
-Enter
-Sleep 400ms
+# ---- the history, with the diffs attached ---------------------------------
 Show
 Sleep 300ms
 Type "slu ilog"
@@ -51,12 +39,16 @@ Down 2
 Sleep 1.4s
 Enter
 Sleep 1.5s
-Ctrl+D
+Ctrl+Down
+Ctrl+Down
+Ctrl+Down
 Sleep 1.5s
 Screenshot ../readme-assets/ilog-diff.png
 Sleep 1.5s
 # ctrl and the same keys drive the diff: down it, then sideways for long lines
-Ctrl+D
+Ctrl+Down
+Ctrl+Down
+Ctrl+Down
 Sleep 1.8s
 Ctrl+L
 Ctrl+L
@@ -69,4 +61,4 @@ Sleep 1.2s
 Escape
 Sleep 1s
 Type "q"
-Sleep 3s
+Sleep 500ms

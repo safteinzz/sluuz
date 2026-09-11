@@ -5,7 +5,7 @@ pub mod ilog;
 pub mod irepos;
 pub mod iscan;
 pub mod istatus;
-pub mod itidy;
+pub mod itag;
 pub mod repos;
 pub mod scan;
 pub mod search;

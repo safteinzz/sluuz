@@ -1,7 +1,7 @@
 //! The commits level: a branch's (or the log's) commits, and the files each one
 //! touched in the pane below.
 
-use super::App;
+use super::{App, Level};
 use crate::git::load::{self, Commit, FileEntry};
 use std::collections::HashSet;
 
@@ -26,9 +26,9 @@ pub enum Scope {
     Pushed,
 }
 
-/// Left→right order for the `h`/`l` slider; `All` in the middle.
-pub const SCOPES: [Scope; 3] = [Scope::Local, Scope::All, Scope::Pushed];
-pub const DEFAULT_SCOPE: usize = 1;
+/// Tab order: the default first, as in every view, then local towards remote.
+pub const SCOPES: [Scope; 3] = [Scope::All, Scope::Local, Scope::Pushed];
+pub const DEFAULT_SCOPE: usize = 0;
 
 impl Scope {
     pub fn label(self) -> &'static str {
@@ -72,20 +72,24 @@ impl App {
     }
 
     /// Start the log for whatever `log_args` currently says: the entry command's
-    /// flags, or the branch picked at the level above. Nothing waits for it -
-    /// the pane empties now and fills as rows arrive.
+    /// flags, the branch picked at the level above, or under `itag` the tag
+    /// whose own commits it is. Nothing waits for it - the pane empties now and
+    /// fills as rows arrive.
     pub(super) fn request_commits(&mut self) {
         let seq = self.cfeed.issue();
         self.commits.clear();
         self.csel.show(Vec::new());
-        load::stream_commits(
+        let (repo, latest, tx) = (
             self.repo.clone(),
-            self.log_args.clone(),
-            self.limit,
-            seq,
             self.cfeed.latest.clone(),
             self.tx.clone(),
         );
+        match self.log_args.first() {
+            Some(tag) if self.start == Level::Tags => {
+                load::stream_tag_commits(repo, tag.clone(), self.limit, seq, latest, tx);
+            }
+            _ => load::stream_commits(repo, self.log_args.clone(), self.limit, seq, latest, tx),
+        }
     }
 
     /// Fold newly streamed commits into what is on screen, honouring both the

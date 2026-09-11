@@ -28,10 +28,10 @@ const VERBS: &[(&str, &str)] = &[
     ("trace", "a prettier history view"),
     ("irepos", "interactive repo explorer (TUI)"),
     ("ibranch", "interactive branch explorer (TUI)"),
+    ("itag", "interactive tag explorer (TUI)"),
     ("ilog", "interactive log explorer (TUI)"),
     ("iscan", "interactive history search (TUI)"),
     ("istatus", "interactive status, stage and review (TUI)"),
-    ("itidy", "interactively delete finished branches (TUI)"),
     ("self", "update or check slu itself"),
     ("completions", "print a shell completion script"),
 ];

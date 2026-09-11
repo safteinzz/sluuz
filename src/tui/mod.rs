@@ -3,7 +3,7 @@
 //! not terminal work, so the queries the views run live in `git::load`.
 //!
 //! Nothing in here knows about any one view. `app/` builds the repos → branches
-//! → commits → diff drill on top of it, and `iscan`/`istatus`/`itidy` use the
+//! → commits → diff drill on top of it, and `iscan`/`istatus` use the
 //! same pieces to draw their own screens.
 
 /// How long a frame waits for a key while something is still arriving: a
@@ -53,28 +53,6 @@ pub fn pane_width(terminal: &DefaultTerminal) -> u16 {
         .size()
         .map(|s| s.width.saturating_sub(2))
         .unwrap_or(120)
-}
-
-/// Inner height of the lower (~60%) pane - the diff viewport, in rows.
-pub fn pane_height(terminal: &DefaultTerminal) -> u16 {
-    terminal
-        .size()
-        .map(|s| ((s.height as u32 * 6 / 10).saturating_sub(2).max(1)) as u16)
-        .unwrap_or(20)
-}
-
-/// Inner height of the upper (~40%) pane - the list a level's plain keys drive,
-/// and what PageUp/PageDown move it by.
-pub fn upper_pane_height(terminal: &DefaultTerminal) -> u16 {
-    terminal
-        .size()
-        .map(|s| ((s.height as u32 * 4 / 10).saturating_sub(2).max(1)) as u16)
-        .unwrap_or(14)
-}
-
-/// Half the height of the lower (~60%) pane, for vim Ctrl-d/Ctrl-u.
-pub fn half_page(terminal: &DefaultTerminal) -> u16 {
-    (pane_height(terminal) / 2).max(1)
 }
 
 /// Clamp a scroll offset so the last line can't scroll above the viewport -

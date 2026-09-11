@@ -89,6 +89,17 @@ c() {
       git -C "$repo" commit -q -m "$msg"
 }
 
+# `tag <repo> <seconds-ago> <name> <message> [rev]` - an annotated tag, on HEAD
+# unless told otherwise, with a chosen age. An annotated tag carries its own
+# date, which is the one itag shows.
+tag() {
+  local repo=$1 age=$2 name=$3 msg=$4 rev=${5:-HEAD}
+  env -i $(stage_env) \
+      GIT_COMMITTER_NAME="Ada Weller" GIT_COMMITTER_EMAIL="ada@example.com" \
+      GIT_COMMITTER_DATE="@$((NOW - age)) +0000" \
+      git -C "$repo" tag -f -a "$name" -m "$msg" "$rev" > /dev/null
+}
+
 # `origin <repo>` - a real bare remote under the stage, pushed to for real, so
 # every ahead/behind count on screen is genuine git tracking state.
 origin() {
@@ -101,18 +112,21 @@ origin() {
 # Last thing `up` does: swap every origin URL for one that looks like a forge.
 # The tracking refs stay exactly where they are - they are local refs - so the
 # counts survive and the dashboard shows `gitlab.com:acme/<repo>` instead of a
-# path out of this rig. Nothing is ever pushed or fetched after this point.
+# path out of this rig. Anything that does reach for the forge after this -
+# itag's `git ls-remote` - is sent back to the bare repo by `insteadOf`, so it
+# gets a real answer and nothing leaves the machine.
 seal_remotes() {
   local repo name
   for repo in "$WORK"/*; do
     name=$(basename "$repo")
     g -C "$repo" config remote.origin.url "git@gitlab.com:acme/$name.git"
   done
+  g config --global url."$REMOTES/".insteadOf "git@gitlab.com:acme/"
 }
 
 # `gone <repo> <branch>` - a branch whose upstream was deleted on the forge:
 # the config still points at it, the tracking ref is gone. That is what
-# `%(upstream:track)` reports as [gone], and what tidy and itidy look for.
+# `%(upstream:track)` reports as [gone], and what tidy and ibranch's `d` look for.
 gone() {
   local repo=$1 branch=$2 name; name=$(basename "$repo")
   g -C "$repo" update-ref -d "refs/remotes/origin/$branch"
@@ -344,9 +358,9 @@ EOF
   c "$r" 7200 ada "Add a bounded drain for the test harness"
 }
 
-# edge-proxy: the deep one. Enough history for the log to look real, a branch of
-# every push state for ibranch and itidy, and the token-bucket rewrite that the
-# diff shot is taken on.
+# edge-proxy: the deep one. Enough history for the log to look real, a branch and
+# a tag of every push state for ibranch and itag, and the token-bucket
+# rewrite that the diff shot is taken on.
 build_edge_proxy() {
   local r; r=$(newrepo edge-proxy)
   mkdir -p "$r/src"
@@ -422,6 +436,7 @@ pub fn serve(addr: SocketAddr) {
 }
 EOF
   c "$r" 15552000 marek "Initial proxy skeleton"
+  tag "$r" 15552000 v2.0.4 "First cut"
   sed -i 's/todo!("wire up hyper")/unimplemented!("wire up hyper")/' "$r/src/upstream.rs"
   c "$r" 13996800 marek "Serve requests over hyper"
   printf '\n[profile.release]\nlto = true\n' >> "$r/Cargo.toml"
@@ -445,6 +460,7 @@ EOF
   c "$r" 8640000 priya "Add a health endpoint"
   sed -i 's/version = "2.0.4"/version = "2.1.0"/' "$r/Cargo.toml"
   c "$r" 6912000 ada "Release 2.1.0"
+  tag "$r" 6912000 v2.1.0 "Release 2.1.0"
 
   # The star of the diff shot: a whole strategy swapped out, so the pane shows
   # removals on the left and their replacement on the right.
@@ -537,13 +553,17 @@ EOF
   sed -i 's/^pub fn healthy() -> bool {/pub fn healthy() -> bool {\n    \/\/ TODO: report upstream reachability, not just our own process\n/' "$r/src/health.rs"
   c "$r" 1728000 ada "Note what the health endpoint still does not check"
   origin "$r"
+  g -C "$r" push -q origin v2.0.4 v2.1.0
+  # Re-cut after the push with a better message: same commit, a different tag
+  # object, which is what itag marks ⚑.
+  tag "$r" 15465600 v2.0.4 "First cut - the skeleton behind the load balancer" "v2.0.4^{}"
 
   # release/v2.1: pushed and left alone, so ibranch has something reading
   # "synced" next to all the drama.
   g -C "$r" checkout -q -b release/v2.1
   g -C "$r" push -q -u origin release/v2.1
 
-  # Two branches whose upstream was deleted after the merge: itidy's whole list.
+  # Branches whose upstream was deleted after the merge: what `d` may delete.
   g -C "$r" checkout -q -b fix/upstream-timeout main
   sed -i 's/Duration::from_secs(30)/Duration::from_secs(15)/' "$r/src/upstream.rs"
   c "$r" 1209600 marek "Halve the drain timeout"
@@ -588,6 +608,8 @@ mod tests {
 }
 EOF
   c "$r" 432000 marek "Test the bucket refill"
+  # Tagged and never pushed: ↑.
+  tag "$r" 400000 v2.2.0-rc.1 "Leaky bucket, for the brave"
 
   # Never pushed anywhere: "no remote".
   g -C "$r" checkout -q -b spike/http3 main
@@ -603,12 +625,17 @@ EOF
   g -C "$r" checkout -q main
   # Two commits that only the remote has, so main reads ↓2: push them, then
   # rewind the local branch and leave the tracking ref where it was.
-  sed -i 's/^tokio = /tokio = /' "$r/Cargo.toml"
+  # The first is chore/bump-deps squashed in, so that gone branch's change is
+  # on origin/main under a new id - what `d` recognises as landed.
+  sed -i 's/^hyper = "1"/hyper = "1.4"/' "$r/Cargo.toml"
   printf '\n# vendored while the upstream fix lands\n' >> "$r/Cargo.toml"
   c "$r" 180000 priya "Vendor the hyper fix"
   sed -i 's/version = "2.1.0"/version = "2.1.1"/' "$r/Cargo.toml"
   c "$r" 90000 priya "Release 2.1.1"
-  g -C "$r" push -q origin main
+  # Tagged and pushed from another machine, so only the remote has it: ↓.
+  tag "$r" 90000 v2.1.1 "Release 2.1.1"
+  g -C "$r" push -q origin main v2.1.1
+  g -C "$r" tag -d v2.1.1 > /dev/null
   g -C "$r" reset -q --hard HEAD~2
 }
 

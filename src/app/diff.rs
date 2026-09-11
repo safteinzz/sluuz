@@ -7,13 +7,13 @@ use super::{App, Level};
 use crate::git::load::{commit_diff_ctx, load_diff_raw};
 use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{RenderedDiff, render_prepared};
-use crate::tui::{clamp_hscroll, clamp_scroll, half_page, pane_height};
+use crate::tui::{clamp_hscroll, clamp_scroll};
 use ratatui::DefaultTerminal;
 
-/// Rows a Ctrl-j/k moves the diff, and columns a Ctrl-h/l pans it.
+/// Rows a Ctrl-j/k moves the diff, and columns a Ctrl-h/l pans it, before a held
+/// key multiplies them.
 const SCROLL_STEP: u16 = 3;
 const PAN_STEP: u16 = 8;
-const PAGE_STEP: u16 = 10;
 
 impl App {
     /// Open the selected file of the selected commit into the diff level.
@@ -46,42 +46,32 @@ impl App {
         self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
     }
 
-    pub(super) fn scroll_diff(&mut self, delta: i32) {
-        self.diff_scroll = if delta >= 0 {
-            self.diff_scroll.saturating_add(delta as u16)
+    pub(super) fn scroll_diff(&mut self, down: bool, steps: usize) {
+        let by = SCROLL_STEP.saturating_mul(steps as u16);
+        self.diff_scroll = if down {
+            self.diff_scroll.saturating_add(by)
         } else {
-            self.diff_scroll.saturating_sub(delta.unsigned_abs() as u16)
+            self.diff_scroll.saturating_sub(by)
         };
     }
 
-    pub(super) fn pan_diff(&mut self, right: bool) {
+    pub(super) fn pan_diff(&mut self, right: bool, steps: usize) {
+        let by = PAN_STEP.saturating_mul(steps as u16);
         self.diff_hscroll = if right {
             clamp_hscroll(
-                self.diff_hscroll.saturating_add(PAN_STEP),
+                self.diff_hscroll.saturating_add(by),
                 self.prepared.max_line(),
                 self.prepared.cell_width(self.width),
             )
         } else {
-            self.diff_hscroll.saturating_sub(PAN_STEP)
+            self.diff_hscroll.saturating_sub(by)
         };
         self.relayout_diff();
     }
 
-    /// Steps for the keys that move by more than a line.
-    pub(super) fn half_page(terminal: &DefaultTerminal) -> i32 {
-        half_page(terminal) as i32
-    }
-
-    pub(super) const STEP: i32 = SCROLL_STEP as i32;
-    pub(super) const PAGE: i32 = PAGE_STEP as i32;
-
     /// Keep the last line from scrolling up past the top of the viewport.
-    pub(super) fn clamp_diff(&mut self, terminal: &DefaultTerminal) {
-        self.diff_scroll = clamp_scroll(
-            self.diff_scroll,
-            self.diff.lines.len(),
-            pane_height(terminal),
-        );
+    pub(super) fn clamp_diff(&mut self) {
+        self.diff_scroll = clamp_scroll(self.diff_scroll, self.diff.lines.len(), self.diff_rows);
     }
 
     /// Hand the file to the user's `git difftool`, then take the terminal back.
@@ -94,7 +84,7 @@ impl App {
         self.width = crate::tui::pane_width(terminal);
         match outcome {
             DiffTool::Quiet => {}
-            DiffTool::Note(m) => self.msg = Some(m),
+            DiffTool::Note(m) => self.set_failed(m),
             DiffTool::Failed(modal) => self.modal = Some(modal),
         }
     }

@@ -2,11 +2,15 @@
 //! branch they tracked was deleted) across every repo under a path, with how
 //! long since each was last touched.
 //!
-//! These are the genuinely-finished branches - e.g. a merged PR the remote
-//! auto-deleted - the same set `slu itidy` offers to delete interactively.
-//! Branches still alive on the remote, or that never had an upstream, are left
-//! alone. This is the non-interactive, multi-repo view; `slu itidy` is the TUI.
+//! A gone upstream is the sign a branch is finished - e.g. a merged PR the
+//! remote auto-deleted - but not proof its work reached the remote: a commit
+//! made after the merge did not. So each one is checked against the remote's
+//! main line the way `d` in `slu ibranch` checks it, and only those whose
+//! changes are all there are offered for deletion. Branches still alive on the
+//! remote, or that never had an upstream, are left alone. This is the
+//! non-interactive, multi-repo view; `slu ibranch` is the TUI.
 
+use crate::git::load;
 use crate::git::{
     SEP, display_name, find_repos, first_line, git_capture, git_run, prunes_on_fetch,
 };
@@ -37,6 +41,9 @@ pub struct Args {
 struct Branch {
     name: String,
     age: String,
+    /// Every change on it is already in the remote's main line, so deleting it
+    /// loses nothing.
+    landed: bool,
 }
 
 pub fn run(args: Args) {
@@ -53,6 +60,7 @@ pub fn run(args: Args) {
 
     let mut total_repos = 0usize;
     let mut total_branches = 0usize;
+    let mut total_holding = 0usize;
     // A repo that does not prune on fetch can be holding a remote-tracking ref
     // for a branch the remote deleted, which is exactly what hides a branch
     // from this report.
@@ -74,9 +82,9 @@ pub fn run(args: Args) {
             stale_possible = !prunes_on_fetch(repo_str);
         }
 
-        let merged = gone_branches(repo_str, &current);
+        let gone = gone_branches(repo_str, &current);
 
-        if merged.is_empty() {
+        if gone.is_empty() {
             if args.all {
                 println!(
                     "{} {}",
@@ -87,47 +95,73 @@ pub fn run(args: Args) {
             continue;
         }
 
-        total_repos += 1;
-        total_branches += merged.len();
+        let (safe, holding): (Vec<&Branch>, Vec<&Branch>) = gone.iter().partition(|b| b.landed);
+        total_repos += usize::from(!safe.is_empty());
+        total_branches += safe.len();
+        total_holding += holding.len();
 
         println!(
             "{}  {}",
             format!("📁 {}", name).bold(),
             format!("(on {})", current).dimmed()
         );
-        println!("   {}", "upstream gone - safe to delete:".dimmed());
-
-        let width = merged.iter().map(|b| b.name.len()).max().unwrap_or(0);
-        for b in &merged {
+        let width = gone.iter().map(|b| b.name.len()).max().unwrap_or(0);
+        let list = |branches: &[&Branch]| {
+            for b in branches {
+                println!(
+                    "     {}  {}",
+                    format!("{:width$}", b.name).yellow(),
+                    b.age.dimmed()
+                );
+            }
+        };
+        if !safe.is_empty() {
             println!(
-                "     {}  {}",
-                format!("{:width$}", b.name).yellow(),
-                b.age.dimmed()
+                "   {}",
+                "upstream gone, changes already on the remote - safe to delete:".dimmed()
+            );
+            list(&safe);
+            let names = safe
+                .iter()
+                .map(|b| b.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            // `-D`: their changes were just shown to be on the remote, and `-d`
+            // refuses any branch that reached it by squash or rebase.
+            println!("   {} git branch -D {}", "↳".dimmed(), names.dimmed());
+        }
+        if !holding.is_empty() {
+            println!(
+                "   {}",
+                "upstream gone, but holding changes the remote does not have - left alone:"
+                    .dimmed()
+            );
+            list(&holding);
+            println!(
+                "   {} {}",
+                "↳".dimmed(),
+                "look before deleting: slu ibranch -g".dimmed()
             );
         }
-        // Handy one-liner to actually delete them.
-        let names = merged
-            .iter()
-            .map(|b| b.name.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        println!("   {} git branch -d {}\n", "↳".dimmed(), names.dimmed());
+        println!();
     }
 
-    if total_branches == 0 {
+    if total_branches == 0 && total_holding == 0 {
         println!(
             "{}",
             "No branches with a gone upstream to clean up.".green()
         );
     } else {
-        println!(
-            "{}",
-            format!(
-                "{} branch(es) across {} repo(s) can be deleted",
-                total_branches, total_repos
-            )
-            .dimmed()
+        let mut summary = format!(
+            "{} branch(es) across {} repo(s) can be deleted",
+            total_branches, total_repos
         );
+        if total_holding > 0 {
+            summary.push_str(&format!(
+                " · {total_holding} hold changes the remote does not have"
+            ));
+        }
+        println!("{}", summary.dimmed());
     }
 
     // Said out loud rather than assumed: git only marks a branch `[gone]` once
@@ -183,13 +217,16 @@ fn prune(repo: &str) -> Option<String> {
 
 /// Local branches whose upstream is gone (the remote branch they tracked was
 /// deleted), excluding the checked-out `current` branch, each with a relative
-/// "last commit" age. Same detection as `slu itidy`.
+/// "last commit" age and whether its changes already reached the remote's main
+/// line. Same detection as `d` in `slu ibranch`.
 ///
 /// `%(refname)` is stripped to the plain branch name ourselves - `%(refname:short)`
 /// would return `heads/v0.2.20` when a tag of the same name exists, which
 /// `git branch -d` can't take.
 fn gone_branches(repo: &str, current: &str) -> Vec<Branch> {
-    let fmt = format!("--format=%(refname){SEP}%(upstream:track){SEP}%(committerdate:relative)");
+    let fmt = format!(
+        "--format=%(refname){SEP}%(upstream:track){SEP}%(committerdate:relative){SEP}%(upstream:remotename)"
+    );
     git_capture(
         repo,
         &["for-each-ref", "--sort=-committerdate", &fmt, "refs/heads"],
@@ -208,12 +245,23 @@ fn gone_branches(repo: &str, current: &str) -> Vec<Branch> {
                 if name == current {
                     return None; // can't delete the checked-out branch
                 }
+                let age = f.next().unwrap_or("").to_string();
+                let remote = f.next().filter(|r| !r.is_empty()).unwrap_or("origin");
                 Some(Branch {
+                    landed: landed(repo, name, remote),
                     name: name.to_string(),
-                    age: f.next().unwrap_or("").to_string(),
+                    age,
                 })
             })
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// Whether deleting `branch` loses nothing: none of its commits are missing
+/// from every remote, or all their changes are in `remote`'s main line anyway.
+/// A repo whose remote has no main line to compare with reads as not landed.
+fn landed(repo: &str, branch: &str, remote: &str) -> bool {
+    load::unique_commits(repo, branch) == 0
+        || load::trunk(repo, remote).is_some_and(|t| load::landed(repo, branch, &t))
 }

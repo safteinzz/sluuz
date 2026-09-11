@@ -1,4 +1,5 @@
-# Staging: git's own status, and then the same status you can act on.
+# Staging: git's own status, with the diff and the keys to act on it. git's
+# plain output is a still, from plain.tape.
 #
 #   ./render.sh status
 
@@ -25,22 +26,7 @@ Sleep 2s
 Type "cd checkout-service && clear"
 Enter
 Sleep 600ms
-Show
-Sleep 400ms
-
-# ---- it is still git ------------------------------------------------------
-Type "slu status -sb"
-Enter
-Sleep 2.2s
-Type "slu log --oneline -4"
-Enter
-Sleep 2.5s
-
-# ---- the same two columns, with the diff and the staging keys -------------
-Hide
-Type "clear"
-Enter
-Sleep 400ms
+# ---- git's two columns, with the diff and the staging keys ---------------
 Show
 Sleep 300ms
 Type "slu istatus"
@@ -61,4 +47,4 @@ Type "l"
 Type "l"
 Sleep 2s
 Type "q"
-Sleep 3s
+Sleep 500ms

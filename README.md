@@ -27,47 +27,40 @@ slu push
 slu rebase -i HEAD~3
 ```
 
-Then come the parts it does not. Each one below is a plain command and its
-interactive twin, because they answer the same question.
+Then come the parts it does not. Each one below is an interactive tool and the
+plain command that prints the same answer, for scripts and pipes.
 
 ## Every repo at once, and a way into them
+
+![slu irepos drilling from a repository through its branches and commits into a diff, narrowing each list by typing a filter](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos.gif)
 
 Legend: `✚` uncommitted · `↑` unpushed commits · `↓` unpulled commits
 
 ```bash
-slu repos                # every repo under here
-slu repos --dirty        # only the ones needing attention
-slu irepos               # the same list, with a way in
+slu irepos               # every repo under here, with a way in; `s` syncs them all, `S` also pulls
 slu irepos ~/projects    # or under somewhere else
+slu repos                # the same list, printed
+slu repos --dirty        # only the ones needing attention
 ```
 
-![slu repos listing six repositories with their branch and state, then the same list filtered to the dirty ones, then slu irepos using the filter to navigate instead of the arrow keys - / proxy narrowing six repositories to edge-proxy, / feat narrowing its branches to two, ? Marek narrowing the commits under those to that author's four - then ctrl-down picking one of them and drilling into its diff, before walking back out with Esc](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos.gif)
+![slu repos listing six repositories and their state, then only the dirty ones](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos-plain.png)
 
-One app, three doors: `slu ibranch` opens it at the branches level and
-`slu ilog` at the commits level of the repo you are standing in.
-
-Plain keys drive the list you are on, `Ctrl` the preview under it: `j`/`k` move
-and `PageUp`/`PageDown` page the top pane, `Ctrl-j`/`Ctrl-k` move the preview and
-`Ctrl-d`/`Ctrl-u` half-page it, `h`/`l` slide the scope, `Enter` drills in and
-`Esc` steps back out. `/` filters the top pane and `?` the one below it: terms
-are separated by spaces and all of them have to appear somewhere in a row, so
-`pablo fix` finds what both words are in, whether that is a sha, an author, a
-date or a subject. `r` reads the level again, for when another terminal has
-committed something since you opened this one - the cursor stays on the branch
-or commit it was on, by name rather than by position. Lists load in the
-background and keep filtering as they arrive, so nothing you press ever waits on
-git.
+One app, four doors: `slu ibranch` opens it at the branches level, `slu itag`
+at the tags level and `slu ilog` at the commits level of the repo you are
+standing in.
 
 ## Find a leaked string in every repo's history
 
+![slu iscan searching every repository's history for a password and browsing the hits with the diff of each](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/sleuth.gif)
+
 ```bash
-slu search -r "1337-let-me-in"        # one string, every repo
-slu scan                              # the usual terms
-slu scan -t "AKIA,BEGIN RSA PRIVATE KEY"
 slu iscan                             # type the terms, browse the hits
+slu search -r "1337-let-me-in"        # one string, every repo, printed
+slu scan                              # the usual terms, printed
+slu scan -t "AKIA,BEGIN RSA PRIVATE KEY"
 ```
 
-![slu search finding a password across three repositories, then slu scan sweeping six of them for the default secret terms, then slu iscan running the same hunt from a query bar with the diff of each hit below](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/sleuth.gif)
+![slu scan's report over six repositories, ending in a summary of seven hits](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/sleuth-plain.png)
 
 `notifications-worker` is the case a file listing cannot find: `.env` was
 untracked afterwards, so the secret survives only in history. The `origin/` refs
@@ -77,60 +70,119 @@ Terms are case-insensitive and default to
 `password,secret,token,api_key,passwd,credentials`; `-t` replaces that list.
 Being pickaxe-based, all three also read binary and encrypted blobs.
 
-![Scan report over six repositories, three of them clean, ending in a summary of seven hits and the two ways to remove a secret from history](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/scan.png)
-
 ## Read history in a real diff view
+
+![slu ilog showing a history with a side-by-side diff below it, scrolled and panned](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history.gif)
+
+```bash
+slu ilog                     # this branch
+slu ilog --all -n 500        # every branch, more history
+slu ilog src/main.rs         # only commits touching that path
+slu trace [-a] [-g] [-n N]   # the aligned log, printed; every branch, with a graph
+```
+
+![slu ilog with the selected commit's diff side by side below it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/ilog-diff.png)
+
+![slu trace -a listing every branch's history in aligned columns](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history-plain.png)
 
 Highlighted in pure Rust, so no external diff tool is required - though `Enter`
 hands the file to yours if you want it.
 
-```bash
-slu trace [-a] [-g] [-n N]   # aligned log, optionally every branch, with a graph
-slu ilog                     # this branch
-slu ilog --all -n 500        # every branch, more history
-slu ilog src/main.rs         # only commits touching that path
-```
-
-![slu trace listing a repository's history in aligned columns, then slu ilog opening the same history with a side-by-side diff below it, scrolling down through the diff and panning it sideways](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history.gif)
-
-![Interactive log with nine commits on top and the selected commit's diff below, old and new side by side with line-number gutters and red and green change tinting](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/ilog-diff.png)
-
 ## Stage and review in one place
 
-`git status` you can act on. The two-column code is git's own: **left is
-staged** (green), **right is unstaged** (red), so `M ` is staged, ` M` is
-unstaged, `MM` is both and `??` is untracked.
+![slu istatus staging and unstaging a file with its diff below, and switching between its tabs](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status.gif)
+
+Legend: left column staged (green) · right column unstaged (red) · `MM` both ·
+`??` untracked
 
 ```bash
+slu istatus              # the two columns, with the diffs
 slu status -sb           # real git, passed straight through
-slu istatus              # the same two columns, with the diffs and the keys
 ```
 
-![slu status -sb and slu log printing real git output, then slu istatus showing the same four files with their diff below, staging one with s so its marker moves to the staged column, unstaging it again with u, and sliding the list between staged, all and unstaged](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status.gif)
+![slu status -sb and slu log as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status-plain.png)
 
-The diff pane follows the scope. Works from any subdirectory.
+`git status` you can act on, in git's own two-column code. `s` stages the file
+under the cursor, `u` unstages it and `space` flips it. The diff pane shows the
+side the tab you are on is about. Works from any subdirectory.
 
 ## Know what you have not pushed, and delete what is finished
+
+![slu ibranch listing branches with their push state across its tabs, filtering them, asking for an unpushed branch's name before it would delete it, then deleting a finished one](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
 
 Legend: `↑N` ahead of upstream · `no remote` never pushed · `⚑ gone` upstream
 was deleted · `synced` in step
 
 ```bash
-slu ibranch [-a]         # push state of every branch, local or local + remote
+slu ibranch [-r|-g]      # push state of your branches; `d` deletes, `s` syncs, `S` also pulls
+                         # -r opens on the remote's, -g on the finished ones (upstream gone)
 slu tidy [path] [-a]     # finished branches across every repo, with a delete command to paste
 slu tidy -p              # the same, after dropping remote branches that are gone
-slu itidy                # the same list, deleted in place (`r` reloads, `p` prunes)
 ```
 
-![slu ibranch listing eight branches with their push state, sliding between local, all and remote scope, then narrowing the branch list to the two fix branches by typing / fix and the commits under it to the two health ones with ? health, then slu tidy reporting the finished branches across every repo, then slu itidy deleting one through a confirmation dialog that opens on No](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
+![slu tidy -a reporting the finished branches across six repositories](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches-plain.png)
 
 "Finished" means **upstream gone**, not "merged", so a branch still alive on the
-remote is never suggested for deletion, and the confirm defaults to **No**.
+remote is never suggested for deletion. A gone branch is only offered once its
+changes are on the remote's main line, however they got there; one holding work
+the remote does not have is listed apart and left for you to look at.
 
 Git only marks a branch gone once the remote-tracking ref is really absent, and
-a plain `git fetch` never removes one - so on a repo that does not prune, this
-list can be missing branches and says so. `-p` prunes first; `git config --global
-fetch.prune true` fixes it for good.
+a plain `git fetch` never removes one - so on a repo that does not prune, `tidy`
+can be missing branches and says so. `tidy -p`, or `s` in `ibranch`, prunes
+first; `git config --global fetch.prune true` fixes it for good.
+
+## Know which tags the remote has
+
+![slu itag marking three tags against the remote, asking for a pushed one's name before it would delete it everywhere, opening another's commits and a diff, and deleting that one](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/tags.gif)
+
+Legend: `↑` not pushed · `⚑` the remote's tag is not the same as yours · `↓` only
+the remote has it
+
+```bash
+slu itag                 # every tag against the remote, and what went into each
+slu tag -n               # real git, passed straight through
+```
+
+![slu tag -n as git prints it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/tags-plain.png)
+
+git keeps no record of which tags a remote has, so `slu itag` asks it with `git
+ls-remote` once the list is up, and never stops to prompt for a password: a
+remote that wants one reads as unreachable. Below each tag are the commits since
+the tag before it on the same line of history, which is what went into that
+release.
+
+Branches do not have that wait because every clone has git keep a copy of the
+remote's branches (`origin/main`). `t` offers the same for tags: one fetch rule
+in this repo's `.git/config`, after which git keeps a copy of the remote's tags
+on every fetch and push, and `slu itag` shows the marks at once while it checks
+for anything newer. The copy lives in `refs/remote-tags/`, outside
+`refs/remotes/`, so tags never show up as remote branches.
+
+## Commands
+
+```bash
+slu sync [path] [--pull]       # fetch and prune every repo, optionally fast-forward
+slu each <git args>            # run any git command in every repo, in parallel
+```
+
+Multi-repo commands take a `path` (default `.`) and `-d, --depth <N>` (default
+3), and `slu <command> --help` lists any command's full flags.
+
+## Keys
+
+| key | does |
+| --- | --- |
+| `j` `k` / `↑` `↓` | move, faster the longer you hold it; with `Ctrl`, move the pane below or scroll a diff |
+| `h` `l` / `←` `→` | switch tab; with `Ctrl`, pan a diff sideways |
+| `/` `?` | filter the top pane / the pane below; every space-separated term has to match |
+| `Enter` | open what is under the cursor |
+| `Esc` | step back out |
+| `r` | read it again from git, keeping the cursor on what it was on |
+| `q` / `:q` | quit |
+
+Each screen's own keys are on its bottom row, and `:help` lists every key it
+answers to.
 
 ## Tab completion
 
@@ -145,17 +197,6 @@ slu completions fish --add     # ~/.config/fish/config.fish
 
 Restart your shell afterwards; without `--add` it just prints the script. Works
 in Git Bash and WSL too.
-
-## Commands
-
-```bash
-slu sync [path] [--pull]       # fetch and prune every repo, optionally fast-forward
-slu each <git args>            # run any git command in every repo, in parallel
-```
-
-Multi-repo commands take a `path` (default `.`) and `-d, --depth <N>` for how
-deep to look (default 3). Run `slu <command> --help` for the full flag surface
-of any command.
 
 ## Compatibility
 

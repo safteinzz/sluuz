@@ -3,7 +3,7 @@
 //!
 //! Repos (top, j/k) preview the selected one's branches below (Ctrl-j/k), with
 //! the same state flags `slu repos` prints, so the list doubles as a dashboard.
-//! `h`/`l` slide the scope between dirty, all, and unpushed. Enter drills in,
+//! `h`/`l` move between the all, dirty and unpushed tabs. Enter drills in,
 //! Esc steps back, and quits here.
 
 use crate::app::{App, repo_scope};
@@ -20,7 +20,7 @@ pub struct Args {
     #[arg(short, long, default_value_t = 3)]
     pub depth: usize,
 
-    /// Start in the "dirty" scope (only repos with uncommitted work)
+    /// Start on the repos with uncommitted work
     #[arg(long)]
     pub dirty: bool,
 }

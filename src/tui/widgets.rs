@@ -3,7 +3,7 @@
 
 use crate::git::load::{Commit, FileEntry};
 use crate::tui::clamp_scroll;
-use crate::tui::input::{is_back, is_down, is_up};
+use crate::tui::input::{X_MOVE, is_back, is_down, is_up};
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Margin, Rect};
@@ -13,6 +13,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, ListItem, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Wrap,
 };
+use std::time::Duration;
 
 /// Render a commit row. `unpushed` prepends a yellow `↑` marker (this commit is
 /// on no remote yet); pushed commits get an aligning blank so columns line up.
@@ -61,12 +62,163 @@ fn status_glyph(status: char) -> (Color, char) {
 }
 
 /// A bordered block whose border is bright when the pane is focused.
-pub fn pane_block(title: String, active: bool) -> Block<'static> {
+pub fn pane_block(title: impl Into<Line<'static>>, active: bool) -> Block<'static> {
     let color = if active { Color::Cyan } else { Color::DarkGray };
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color))
         .title(title)
+}
+
+/// How long a note sits in a view's footer before the key hints come back.
+pub const NOTE: Duration = Duration::from_secs(3);
+
+/// What a `:` line asked for.
+pub enum Command {
+    Help,
+    Quit,
+    Unknown(String),
+}
+
+/// What a key did to an open `:` line.
+pub enum Typed {
+    Open,
+    Cancel,
+    Run(Command),
+}
+
+/// The `:` line in a view's footer: what has been typed after the colon. It
+/// opens showing `help` as a placeholder, and Enter on an empty line runs
+/// exactly that, so the one command worth knowing needs nothing typed.
+#[derive(Default)]
+pub struct CommandLine {
+    text: String,
+}
+
+impl CommandLine {
+    pub fn on_key(&mut self, code: KeyCode) -> Typed {
+        match code {
+            KeyCode::Esc => Typed::Cancel,
+            KeyCode::Enter => Typed::Run(match self.text.trim() {
+                "" | "help" | "h" | "keys" => Command::Help,
+                "q" | "quit" => Command::Quit,
+                other => Command::Unknown(other.to_string()),
+            }),
+            KeyCode::Backspace if self.text.is_empty() => Typed::Cancel,
+            KeyCode::Backspace => {
+                self.text.pop();
+                Typed::Open
+            }
+            KeyCode::Char(c) => {
+                self.text.push(c);
+                Typed::Open
+            }
+            _ => Typed::Open,
+        }
+    }
+}
+
+/// The row under a view: the keys it answers to, or for `NOTE` what the last
+/// action came to, green when it worked and yellow when it did not, or the `:`
+/// line while one is open. Keys live here rather than on pane borders, which
+/// only have room for what a pane is. `:help`, when `help` says the view takes
+/// it, is kept at the right edge however narrow the window, since it is the way
+/// to every key that falls off.
+pub fn key_footer(
+    actions: &[String],
+    note: Option<&(bool, String)>,
+    command: Option<&CommandLine>,
+    help: bool,
+    width: u16,
+) -> Paragraph<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let line = match (command, note) {
+        (Some(cmd), _) => {
+            let mut spans = vec![Span::raw(format!(" :{}▏", cmd.text))];
+            if cmd.text.is_empty() {
+                spans.push(Span::styled("help", dim.add_modifier(Modifier::DIM)));
+            }
+            Line::from(spans)
+        }
+        (None, Some((true, text))) => Line::from(Span::styled(
+            format!(" ✓ {text}"),
+            Style::default().fg(Color::Green),
+        )),
+        (None, Some((false, text))) => Line::from(Span::styled(
+            format!(" ✗ {text}"),
+            Style::default().fg(Color::Yellow),
+        )),
+        (None, None) if !help => Line::from(Span::styled(fit(actions, width), dim)),
+        (None, None) => {
+            const HELP: &str = ":help ";
+            let room = (width as usize).saturating_sub(HELP.len() + 2);
+            let left = fit(actions, room as u16);
+            let pad = (width as usize).saturating_sub(left.chars().count() + HELP.len());
+            Line::from(vec![
+                Span::styled(left, dim),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(HELP, dim),
+            ])
+        }
+    };
+    Paragraph::new(line)
+}
+
+/// As many whole keys as fit in `width`, in order: a key cut off mid-word says
+/// less than one left off.
+fn fit(keys: &[String], width: u16) -> String {
+    let mut line = String::new();
+    for key in keys {
+        let next = if line.is_empty() {
+            format!(" {key}")
+        } else {
+            format!("{line} · {key}")
+        };
+        if next.chars().count() > width as usize {
+            break;
+        }
+        line = next;
+    }
+    line
+}
+
+/// The most tabs a slider shows at once. More than this and a border runs out
+/// of room, so a search with a dozen terms shows the ones around where you are.
+const MAX_TABS: usize = 5;
+
+/// A scope slider as tabs: `│` between them, and the picked one filled with
+/// the border's cyan, the way a picked button is. On a pane border, whose own
+/// text is already cyan, a cyan-and-bold stop the way the tab bars in the other
+/// crates mark it did not stand out from the rest. Past `MAX_TABS` it shows a
+/// window that slides with the picked one, and `‹`/`›` say more are hidden.
+pub fn scope_tabs(labels: &[&str], picked: usize) -> Vec<Span<'static>> {
+    let first = picked
+        .saturating_sub(MAX_TABS / 2)
+        .min(labels.len().saturating_sub(MAX_TABS));
+    let last = (first + MAX_TABS).min(labels.len());
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans = Vec::new();
+    if first > 0 {
+        spans.push(Span::styled("‹", dim));
+    }
+    for (i, label) in labels.iter().enumerate().take(last).skip(first) {
+        if i > first {
+            spans.push(Span::styled("│", dim));
+        }
+        let style = if i == picked {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Reset)
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    if last < labels.len() {
+        spans.push(Span::styled("›", dim));
+    }
+    spans
 }
 
 /// Draw a vertical scrollbar down the right edge of `area`, with the thumb at
@@ -121,12 +273,15 @@ pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u
 /// It exists because the alternative is a line in a pane title, which is where
 /// a failed `git difftool` used to be reported and where nobody looked: the
 /// screen came back unchanged and the run looked like a no-op. A view holds an
-/// `Option<Modal>` and hands it the keys first, the way `itidy` gates on its
+/// `Option<Modal>` and hands it the keys first, the way the drill gates on its
 /// confirm popup.
 pub struct Modal {
     title: String,
     body: String,
     scroll: u16,
+    /// Yellow for an alert, cyan for a reader: the one thing that differs.
+    colour: Color,
+    keys: &'static str,
 }
 
 impl Modal {
@@ -135,6 +290,32 @@ impl Modal {
             title: title.into(),
             body: body.into(),
             scroll: 0,
+            colour: Color::Yellow,
+            keys: "j/k ↑↓ scroll · esc dismiss",
+        }
+    }
+
+    /// A reader: the same box in cyan, for something read by choice rather
+    /// than something that went wrong. `rows` is a key and what it does, one
+    /// per line, the keys in one column.
+    pub fn reader(title: impl Into<String>, rows: &[(String, String)]) -> Modal {
+        let width = rows
+            .iter()
+            .map(|(k, _)| k.chars().count())
+            .max()
+            .unwrap_or(0)
+            + 3;
+        let body = rows
+            .iter()
+            .map(|(key, does)| format!("{key:<width$}{does}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Modal {
+            title: title.into(),
+            body,
+            scroll: 0,
+            colour: Color::Cyan,
+            keys: "j/k ↑↓ scroll · esc close",
         }
     }
 
@@ -143,9 +324,9 @@ impl Modal {
     /// for the box; anything else is swallowed, so a stray keypress can't
     /// close a message before it is read.
     pub fn on_key(&mut self, code: KeyCode) -> bool {
-        if is_down(code) || code == KeyCode::PageDown {
+        if is_down(code) {
             self.scroll = self.scroll.saturating_add(1);
-        } else if is_up(code) || code == KeyCode::PageUp {
+        } else if is_up(code) {
             self.scroll = self.scroll.saturating_sub(1);
         } else if is_back(code) || matches!(code, KeyCode::Enter | KeyCode::Char('q' | ' ')) {
             return true;
@@ -174,10 +355,10 @@ impl Modal {
             .map(|l| Line::raw(l.to_string()))
             .collect();
         lines.push(Line::raw(""));
-        lines.push(box_hint("j/k ↑↓ scroll · esc dismiss"));
+        lines.push(box_hint(self.keys));
 
         let body = Paragraph::new(lines)
-            .block(box_block(Color::Yellow, &self.title))
+            .block(box_block(self.colour, &self.title))
             .wrap(Wrap { trim: false })
             .scroll((self.scroll, 0));
         frame.render_widget(body, area);
@@ -276,6 +457,117 @@ pub fn box_buttons(colour: Color, yes: bool) -> Line<'static> {
         Span::raw("  "),
         button("No (n)", !yes),
     ])
+}
+
+/// A Yes/No box: a gate (red, opening on No, since a reflex Enter must never be
+/// the key that fires an irreversible thing) or an offer (cyan, opening on
+/// Yes, with nothing at stake). Which it is comes from `colour` and the `yes`
+/// the caller opens it with. `note` is what else to know before answering.
+pub fn confirm_popup(
+    frame: &mut Frame,
+    colour: Color,
+    title: &str,
+    name: &str,
+    note: Option<&str>,
+    yes: bool,
+) {
+    let full = frame.area();
+    let width = box_width(full.width);
+    let mut lines = vec![Line::from(Span::styled(
+        name.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    for note in note.into_iter().flat_map(str::lines) {
+        lines.push(Line::from(Span::styled(
+            note.to_string(),
+            Style::default().add_modifier(Modifier::DIM),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(box_buttons(colour, yes));
+    lines.push(Line::from(""));
+    lines.push(box_hint(&format!("{X_MOVE} move · enter select · y/n")));
+    // Measured from the wrapped text: a long name or note wraps, and a box of
+    // fixed height would put the buttons past its own bottom border.
+    let inner = box_inner_width(width);
+    let rows: usize = lines.iter().map(|l| l.width().div_ceil(inner).max(1)).sum();
+    let area = popup_area(full, width, box_height(rows as u16, full.height));
+
+    frame.render_widget(Clear, area);
+    let body = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(box_block(colour, title));
+    frame.render_widget(body, area);
+}
+
+/// The typed gate: red, no Yes/No, and nothing happens on Enter until `typed`
+/// is exactly `name`, which the box shows so it is copied rather than guessed.
+pub fn typed_popup(frame: &mut Frame, title: &str, note: Option<&str>, name: &str, typed: &str) {
+    let full = frame.area();
+    let width = box_width(full.width);
+    let mut lines: Vec<Line<'static>> = note
+        .into_iter()
+        .flat_map(str::lines)
+        .map(|l| Line::from(l.to_string()))
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("type "),
+        Span::styled(
+            name.to_string(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" to confirm:"),
+    ]));
+    // Armed or not is shown on the thing Enter does, not only on the text: plain
+    // text and a dim `enter delete` until the name matches, then bold green
+    // text and `enter delete` filled red, the way a picked gate button is.
+    let armed = typed == name;
+    let field = if armed {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    lines.push(Line::from(Span::styled(format!("{typed}▏"), field)));
+    lines.push(Line::from(""));
+    let enter = if armed {
+        Span::styled(
+            " enter delete ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            " enter delete ",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        )
+    };
+    let esc = Span::styled(
+        "  esc cancel",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
+    );
+    lines.push(Line::from(vec![enter, esc]));
+    let inner = box_inner_width(width);
+    let rows: usize = lines.iter().map(|l| l.width().div_ceil(inner).max(1)).sum();
+    let area = popup_area(full, width, box_height(rows as u16, full.height));
+
+    frame.render_widget(Clear, area);
+    let body = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(box_block(Color::Red, title));
+    frame.render_widget(body, area);
 }
 
 /// Rows `text` takes once wrapped to `width` columns.

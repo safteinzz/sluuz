@@ -39,20 +39,23 @@ impl Branch {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Scope {
     Local,
-    All,
     Remote,
+    /// Local branches whose upstream is gone: finished, and what `d` deletes.
+    Gone,
 }
 
-/// Left→right order for the `h`/`l` slider; `All` in the middle.
-pub const SCOPES: [Scope; 3] = [Scope::Local, Scope::All, Scope::Remote];
+/// Tab order: the default first, then the tabs `itag` shares in the same
+/// places, then the one only branches have. No `all`: it was `local` and
+/// `remote` interleaved, which listed every branch you track twice.
+pub const SCOPES: [Scope; 3] = [Scope::Local, Scope::Remote, Scope::Gone];
 pub const DEFAULT_SCOPE: usize = 0;
 
 impl Scope {
     pub fn label(self) -> &'static str {
         match self {
             Scope::Local => "local",
-            Scope::All => "all",
             Scope::Remote => "remote",
+            Scope::Gone => "gone",
         }
     }
 
@@ -60,7 +63,7 @@ impl Scope {
         match self {
             Scope::Local => !b.remote,
             Scope::Remote => b.remote,
-            Scope::All => true,
+            Scope::Gone => !b.remote && b.track.contains("gone"),
         }
     }
 }
@@ -141,7 +144,7 @@ impl App {
             return;
         };
         self.ensure_unpushed();
-        self.log_args = vec![self.branches[i].name.clone()];
+        self.log_args = vec![self.branches[i].refname.clone()];
         self.limit = super::COMMITS_PER_BRANCH;
         self.request_commits();
     }

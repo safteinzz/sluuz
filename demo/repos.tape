@@ -1,5 +1,5 @@
-# Many repositories at once: the dashboard, then the same dashboard with a way
-# in - repos to branches to commits to a diff, and back out again.
+# Many repositories at once, with a way in: repos to branches to commits to a
+# diff, and back out again. The plain `slu repos` is a still, from plain.tape.
 #
 #   ./render.sh repos
 
@@ -26,22 +26,7 @@ Sleep 2s
 Type "clear"
 Enter
 Sleep 600ms
-Show
-Sleep 400ms
-
-# ---- who needs attention --------------------------------------------------
-Type "slu repos"
-Enter
-Sleep 2.5s
-Type "slu repos --dirty"
-Enter
-Sleep 2.8s
-
-# ---- the same list, with a way in ----------------------------------------
-Hide
-Type "clear"
-Enter
-Sleep 400ms
+# ---- every repo, with a way in -------------------------------------------
 Show
 Sleep 300ms
 Type "slu irepos"
@@ -80,7 +65,9 @@ Sleep 1.5s
 # commits → the diff, three enters below a list of repositories
 Enter
 Sleep 1.8s
-Ctrl+D
+Ctrl+Down
+Ctrl+Down
+Ctrl+Down
 Sleep 2s
 # and esc walks back up the way it came down
 Escape
@@ -90,4 +77,4 @@ Sleep 800ms
 Escape
 Sleep 900ms
 Type "q"
-Sleep 2s
+Sleep 500ms

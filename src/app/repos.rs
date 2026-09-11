@@ -1,13 +1,13 @@
 //! The repos level: every repo under a path, and picking one to drill into.
 
 use super::App;
-use crate::git::{RepoStatus, find_repos, repo_status};
+use crate::git::load;
+use crate::git::{RepoStatus, find_repos, first_line, repo_status};
+use crate::tui::widgets::Modal;
 use rayon::prelude::*;
 use std::path::Path;
 
-/// Which slice of the repos the top pane shows. Left is the most local view
-/// (uncommitted work), right the most remote (commits no remote has), matching
-/// the way the branch and commit sliders are laid out.
+/// Which slice of the repos the top pane shows.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Scope {
     Dirty,
@@ -15,9 +15,9 @@ pub enum Scope {
     Unpushed,
 }
 
-pub const SCOPES: [Scope; 3] = [Scope::Dirty, Scope::All, Scope::Unpushed];
-/// `slu irepos` opens on the middle stop, showing everything.
-pub const DEFAULT_SCOPE: usize = 1;
+/// Tab order: the default first, as in every view, then local towards remote.
+pub const SCOPES: [Scope; 3] = [Scope::All, Scope::Dirty, Scope::Unpushed];
+pub const DEFAULT_SCOPE: usize = 0;
 
 impl Scope {
     pub fn label(self) -> &'static str {
@@ -93,6 +93,69 @@ impl App {
         {
             self.rsel.restored_at(at);
         }
+    }
+
+    /// `s`/`S` on the repos level: what `slu sync [--pull]` does, for every
+    /// repo the list is showing, all at once. A fetch can take seconds per
+    /// repo, so doing them one after another would make six repos a wait.
+    pub(super) fn sync_all(&mut self, pull: bool) {
+        let repos: Vec<(String, String)> = self
+            .rsel
+            .visible
+            .iter()
+            .map(|&i| (self.repos[i].name.clone(), self.repos[i].path.clone()))
+            .collect();
+        let outcomes: Vec<(String, Result<usize, String>)> = repos
+            .par_iter()
+            .map(|(name, path)| {
+                let done = load::fetch_prune(path).and_then(|()| {
+                    if pull {
+                        load::fast_forward(path).map(|n| n.unwrap_or(0))
+                    } else {
+                        Ok(0)
+                    }
+                });
+                (name.clone(), done)
+            })
+            .collect();
+
+        let failed: Vec<String> = outcomes
+            .iter()
+            .filter_map(|(name, r)| {
+                r.as_ref()
+                    .err()
+                    .map(|e| format!("{name}: {}", first_line(e)))
+            })
+            .collect();
+        let pulled: usize = outcomes.iter().filter_map(|(_, r)| r.as_ref().ok()).sum();
+        let into = outcomes
+            .iter()
+            .filter(|(_, r)| r.as_ref().is_ok_and(|&n| n > 0))
+            .count();
+        let synced = outcomes.len() - failed.len();
+        let s = if synced == 1 { "" } else { "s" };
+        let mut text = format!("synced {synced} repo{s}");
+        if pull && pulled > 0 {
+            let c = if pulled == 1 { "" } else { "s" };
+            let r = if into == 1 { "" } else { "s" };
+            text.push_str(&format!("; pulled {pulled} commit{c} into {into} repo{r}"));
+        }
+        if failed.is_empty() {
+            self.set_status(text);
+        } else {
+            self.note = None;
+            self.modal = Some(Modal::new(
+                format!("{} of {} repos did not sync", failed.len(), outcomes.len()),
+                failed.join("\n"),
+            ));
+        }
+
+        let keep = self.rsel.idx().map(|i| self.repos[i].path.clone());
+        let (base, depth) = (self.base.clone(), self.depth);
+        self.load_repos(&base, depth);
+        self.rsel.restore = keep;
+        self.rescope_repos();
+        self.pending = true;
     }
 
     /// Point the app at the selected repo and load its branches, which are what

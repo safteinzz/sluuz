@@ -2,9 +2,9 @@
 //!
 //! Top pane: the changed files. Bottom pane: the selected file's diff
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
-//! slide the scope between **staged**, **all**, and **unstaged**; `s`/`u`/Space
-//! stage / unstage / toggle the selected file; Ctrl-↑/↓ (or Ctrl-j/k) and
-//! Ctrl-d/u scroll the diff. `j`/`k` move the file list. `r` reads the working
+//! move between the **all**, **staged** and **unstaged** tabs; `s`/`u`/Space
+//! stage / unstage / toggle the selected file; Ctrl-↑/↓ (or Ctrl-j/k) scroll
+//! the diff. `j`/`k` move the file list. `r` reads the working
 //! tree again, for when a build or another terminal has touched it since this
 //! one opened. `q` / `Esc` / `Ctrl-C` quit.
 //!
@@ -17,12 +17,15 @@ use crate::tui::difffeed::DiffFeed;
 use crate::tui::difftool::{DiffTool, run_difftool};
 use crate::tui::highlight::{Blob, DiffContext, RenderedDiff, render_prepared};
 use crate::tui::input::{
-    CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
+    Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
+    stepped,
 };
-use crate::tui::widgets::{Modal, diff_hscrollbar, diff_scrollbar, list_scrollbar, pane_block};
+use crate::tui::widgets::{
+    Command, CommandLine, Modal, NOTE, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
+    list_scrollbar, pane_block, scope_tabs,
+};
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, half_page, pane_height, pane_width, pop_keyboard_enhancement,
-    push_keyboard_enhancement,
+    clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -33,12 +36,12 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-/// Rows a Ctrl-j/k moves the diff, columns a Ctrl-h/l pans it, and the PgUp/PgDn
-/// jump.
+/// Rows a Ctrl-j/k moves the diff and columns a Ctrl-h/l pans it, before a held
+/// key multiplies them.
 const SCROLL_STEP: u16 = 3;
 const PAN_STEP: u16 = 8;
-const PAGE_STEP: u16 = 10;
 
 #[derive(clap::Args)]
 pub struct Args {}
@@ -51,8 +54,8 @@ enum Scope {
     Unstaged,
 }
 
-/// Left→right order for the `h`/`l` slider; `All` sits in the middle.
-const SCOPES: [Scope; 3] = [Scope::Staged, Scope::All, Scope::Unstaged];
+/// Tab order: the default first, as in every view.
+const SCOPES: [Scope; 3] = [Scope::All, Scope::Staged, Scope::Unstaged];
 
 impl Scope {
     fn label(self) -> &'static str {
@@ -107,11 +110,16 @@ struct App {
     sel: usize,
     scope_idx: usize,
     state: ListState,
-    /// Transient status line (a difftool result, mostly).
-    msg: Option<String>,
+    /// A difftool result, in the footer in place of the keys until `NOTE` is up.
+    note: Option<(bool, String)>,
+    command: Option<CommandLine>,
+    note_at: Instant,
+    /// Rows the diff pane showed on the last frame, which a scroll is clamped to.
+    diff_rows: u16,
     /// A message that has to be read before anything else happens: it owns
     /// every key until it is dismissed.
     modal: Option<Modal>,
+    accel: Accel,
     prepared: RenderedDiff,
     diff: Text<'static>,
     diff_scroll: u16,
@@ -142,10 +150,14 @@ pub fn run(_args: Args) {
         entries: Vec::new(),
         visible: Vec::new(),
         sel: 0,
-        scope_idx: 1, // default: All
+        scope_idx: 0,
         state: ListState::default(),
-        msg: None,
+        note: None,
+        command: None,
+        note_at: Instant::now(),
+        diff_rows: 1,
         modal: None,
+        accel: Accel::default(),
         prepared: RenderedDiff::default(),
         diff: Text::default(),
         diff_scroll: 0,
@@ -287,7 +299,7 @@ impl App {
         let (path, untracked) = (e.path.clone(), e.untracked());
 
         if untracked {
-            self.msg = Some("untracked - nothing to compare".to_string());
+            self.set_failed("untracked - nothing to compare");
             return false;
         }
         let args: &[&str] = if cached { &["--cached", "--"] } else { &["--"] };
@@ -297,10 +309,22 @@ impl App {
         self.width = pane_width(terminal);
         match outcome {
             DiffTool::Quiet => {}
-            DiffTool::Note(m) => self.msg = Some(m),
+            DiffTool::Note(m) => self.set_failed(m),
             DiffTool::Failed(modal) => self.modal = Some(modal),
         }
         true // a difftool edit may have changed the file
+    }
+
+    /// Something did not work, with nothing more to read than one line.
+    fn set_failed(&mut self, text: impl Into<String>) {
+        self.note = Some((false, text.into()));
+        self.note_at = Instant::now();
+    }
+
+    fn note_left(&self) -> Option<Duration> {
+        self.note
+            .as_ref()
+            .map(|_| NOTE.saturating_sub(self.note_at.elapsed()))
     }
 
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -309,8 +333,19 @@ impl App {
             terminal.draw(|frame| draw(frame, self))?;
 
             // While a diff is still being prepared, come back on a frame timer
-            // to show it; otherwise block on the key and leave the CPU alone.
-            if self.dfeed.loading() && !event::poll(FRAME)? {
+            // to show it, and while a note is up, when it is due to go;
+            // otherwise block on the key and leave the CPU alone.
+            let wait = match (self.dfeed.loading(), self.note_left()) {
+                (true, Some(left)) => Some(left.min(FRAME)),
+                (true, None) => Some(FRAME),
+                (false, left) => left,
+            };
+            if let Some(wait) = wait
+                && !event::poll(wait)?
+            {
+                if self.note_left() == Some(Duration::ZERO) {
+                    self.note = None;
+                }
                 continue;
             }
             match event::read()? {
@@ -337,16 +372,37 @@ impl App {
                         continue;
                     }
 
-                    self.msg = None; // any keypress clears a stale status message
+                    self.note = None;
+                    // An open `:` line owns every key until it is run or dropped.
+                    if let Some(cmd) = &mut self.command {
+                        match cmd.on_key(code) {
+                            Typed::Open => {}
+                            Typed::Cancel => self.command = None,
+                            Typed::Run(run) => {
+                                self.command = None;
+                                match run {
+                                    Command::Help => {
+                                        self.modal = Some(Modal::reader("keys · status", &help()))
+                                    }
+                                    Command::Quit => break,
+                                    Command::Unknown(what) => self.set_failed(format!(
+                                        "unknown command `{what}` · :help lists the keys"
+                                    )),
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if code == KeyCode::Char(':') {
+                        self.command = Some(CommandLine::default());
+                        continue;
+                    }
                     if matches!(code, KeyCode::Char('q') | KeyCode::Esc) {
                         break;
                     }
                     self.on_key(code, ctrl, terminal);
-                    self.diff_scroll = clamp_scroll(
-                        self.diff_scroll,
-                        self.diff.lines.len(),
-                        pane_height(terminal),
-                    );
+                    self.diff_scroll =
+                        clamp_scroll(self.diff_scroll, self.diff.lines.len(), self.diff_rows);
                 }
                 _ => {}
             }
@@ -355,37 +411,33 @@ impl App {
     }
 
     fn on_key(&mut self, code: KeyCode, ctrl: bool, terminal: &mut DefaultTerminal) {
-        let half = half_page(terminal);
+        let steps = self.accel.steps(code, ctrl);
         let mut moved = false; // selection or scope changed → re-diff
         let mut reload = false; // working tree changed → re-read status
 
         if ctrl && is_down(code) {
-            self.diff_scroll = self.diff_scroll.saturating_add(SCROLL_STEP);
+            let by = SCROLL_STEP.saturating_mul(steps as u16);
+            self.diff_scroll = self.diff_scroll.saturating_add(by);
         } else if ctrl && is_up(code) {
-            self.diff_scroll = self.diff_scroll.saturating_sub(SCROLL_STEP);
-        } else if ctrl && code == KeyCode::Char('d') {
-            self.diff_scroll = self.diff_scroll.saturating_add(half);
-        } else if ctrl && code == KeyCode::Char('u') {
-            self.diff_scroll = self.diff_scroll.saturating_sub(half);
+            let by = SCROLL_STEP.saturating_mul(steps as u16);
+            self.diff_scroll = self.diff_scroll.saturating_sub(by);
         } else if ctrl && is_right(code) {
             self.diff_hscroll = clamp_hscroll(
-                self.diff_hscroll.saturating_add(PAN_STEP),
+                self.diff_hscroll
+                    .saturating_add(PAN_STEP.saturating_mul(steps as u16)),
                 self.prepared.max_line(),
                 self.prepared.cell_width(self.width),
             );
             self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
         } else if ctrl && is_left(code) {
-            self.diff_hscroll = self.diff_hscroll.saturating_sub(PAN_STEP);
+            self.diff_hscroll = self
+                .diff_hscroll
+                .saturating_sub(PAN_STEP.saturating_mul(steps as u16));
             self.diff = render_prepared(&self.prepared, self.width, self.diff_hscroll);
-        } else if code == KeyCode::PageDown {
-            self.diff_scroll = self.diff_scroll.saturating_add(PAGE_STEP);
-        } else if code == KeyCode::PageUp {
-            self.diff_scroll = self.diff_scroll.saturating_sub(PAGE_STEP);
-        } else if is_down(code) && self.sel + 1 < self.visible.len() {
-            self.sel += 1;
-            moved = true;
-        } else if is_up(code) && self.sel > 0 {
-            self.sel -= 1;
+        } else if (is_down(code) || is_up(code))
+            && stepped(self.sel, self.visible.len(), is_down(code), steps) != self.sel
+        {
+            self.sel = stepped(self.sel, self.visible.len(), is_down(code), steps);
             moved = true;
         } else if !ctrl && is_left(code) && self.scope_idx > 0 {
             self.scope_idx -= 1;
@@ -554,8 +606,11 @@ fn untracked_inside(root: &str, dir: &str) -> Vec<Entry> {
 }
 
 fn draw(frame: &mut ratatui::Frame, app: &mut App) {
-    let areas = Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(frame.area());
+    let [panes, footer_row] =
+        Layout::vertical([Constraint::Min(2), Constraint::Length(1)]).areas(frame.area());
+    let areas =
+        Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)]).split(panes);
+    app.diff_rows = areas[1].height.saturating_sub(2).max(1);
 
     // ── top: file list ──
     let items: Vec<ListItem> = app
@@ -563,19 +618,15 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         .iter()
         .map(|&i| status_item(&app.entries[i]))
         .collect();
-    let top_title = if app.visible.is_empty() {
-        format!(
-            " {}  clean   {X_MOVE} scope · r refresh · q quit ",
-            app.scope().label()
-        )
+    let tail = if app.visible.is_empty() {
+        " clean ".to_string()
     } else {
-        format!(
-            " {}  {}/{}   {Y_MOVE} · {X_MOVE} scope · s/u/space stage · r refresh · q quit ",
-            app.scope().label(),
-            app.sel + 1,
-            app.visible.len()
-        )
+        format!(" {}/{} ", app.sel + 1, app.visible.len())
     };
+    let labels: Vec<&str> = SCOPES.iter().map(|s| s.label()).collect();
+    let mut spans = scope_tabs(&labels, app.scope_idx);
+    spans.push(Span::raw(tail));
+    let top_title = Line::from(spans);
     let list = List::new(items)
         .block(pane_block(top_title, true))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
@@ -588,12 +639,10 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         Some(e) => (e.path.as_str(), diff_tag(e, app.scope())),
         None => ("", ""),
     };
-    let title = match &app.msg {
-        Some(m) => format!(" {path}  ⚠ {m} "),
-        None if path.is_empty() => " (nothing to show) ".to_string(),
-        None => {
-            format!(" {path} {tag}  enter difftool · {CTRL_Y_MOVE} scroll · {CTRL_X_MOVE} pan ")
-        }
+    let title = if path.is_empty() {
+        " (nothing to show) ".to_string()
+    } else {
+        format!(" {path} {tag} ")
     };
     // An empty diff and one still being prepared look the same, so say which.
     let body = if app.diff.lines.is_empty() && app.dfeed.slow() {
@@ -618,9 +667,44 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         app.diff_hscroll,
     );
 
+    let actions = [
+        "s stage".to_string(),
+        "u unstage".to_string(),
+        "space flip".to_string(),
+        "enter difftool".to_string(),
+        "r refresh".to_string(),
+    ];
+    frame.render_widget(
+        key_footer(
+            &actions,
+            app.note.as_ref(),
+            app.command.as_ref(),
+            true,
+            footer_row.width,
+        ),
+        footer_row,
+    );
+
     if let Some(modal) = &mut app.modal {
         modal.draw(frame);
     }
+}
+
+/// Every key the view answers to, for the box `:help` opens.
+fn help() -> Vec<(String, String)> {
+    let row = |k: &str, d: &str| (k.to_string(), d.to_string());
+    vec![
+        row(Y_MOVE, "move (hold to speed up)"),
+        row(X_MOVE, "switch tab"),
+        row("s", "stage the file"),
+        row("u", "unstage it"),
+        row("space", "flip it between staged and not"),
+        row(CTRL_Y_MOVE, "scroll the diff"),
+        row(CTRL_X_MOVE, "pan it sideways"),
+        row("enter", "open the file in your git difftool"),
+        row("r", "read it again from git"),
+        row("q", "quit"),
+    ]
 }
 
 /// Which side of the diff the bottom pane is showing.

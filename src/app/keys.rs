@@ -4,9 +4,9 @@
 //! the pane below it, `h`/`l` slide that level's scope, Enter drills in and Esc
 //! steps back out.
 
-use super::{App, Level, Pane, Sel, branches, commits, repos};
+use super::{App, Level, Pane, branches, commits, repos, tags};
 use crate::tui::input::{is_back, is_down, is_left, is_open, is_right, is_up, norm_esc};
-use crate::tui::{half_page, upper_pane_height};
+use crate::tui::widgets::{Command, CommandLine, Modal, Typed};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -26,15 +26,74 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
         }
         return false;
     }
+    // So does a delete waiting on its answer. A typed gate goes ahead only once
+    // the name is typed exactly, so no reflex can get through it.
+    if let Some(confirm) = &mut app.confirm
+        && confirm.target.typed()
+    {
+        match code {
+            KeyCode::Enter if confirm.typed == confirm.target.name() => {
+                if let Some(confirm) = app.confirm.take() {
+                    app.delete(confirm.target);
+                }
+            }
+            KeyCode::Esc => app.confirm = None,
+            KeyCode::Backspace => {
+                confirm.typed.pop();
+            }
+            KeyCode::Char(c) => confirm.typed.push(c),
+            _ => {}
+        }
+        return false;
+    }
+    // A plain gate: Yes is on the left, and it opens on No, so a reflex Enter is
+    // never the key that loses something.
+    if let Some(confirm) = &mut app.confirm {
+        if is_left(code) {
+            confirm.yes = true;
+        } else if is_right(code) {
+            confirm.yes = false;
+        } else if code == KeyCode::Char('y') || (is_open(code) && confirm.yes) {
+            if let Some(confirm) = app.confirm.take() {
+                app.delete(confirm.target);
+            }
+        } else if is_open(code) || is_back(code) || matches!(code, KeyCode::Char('q' | 'n')) {
+            app.confirm = None;
+        }
+        return false;
+    }
+    // So does an open `:` line.
+    if let Some(cmd) = &mut app.command {
+        match cmd.on_key(code) {
+            Typed::Open => {}
+            Typed::Cancel => app.command = None,
+            Typed::Run(run) => {
+                app.command = None;
+                match run {
+                    Command::Help => {
+                        app.modal = Some(Modal::reader(app.help_title(), &app.help_rows()))
+                    }
+                    Command::Quit => return true,
+                    Command::Unknown(what) => {
+                        app.set_failed(format!("unknown command `{what}` · :help lists the keys"))
+                    }
+                }
+            }
+        }
+        return false;
+    }
     // So does an open query bar - `q` types a letter there, it does not quit.
     if let Some(pane) = app.editing {
         query_key(app, pane, code);
         return false;
     }
 
-    app.msg = None; // any keypress clears a stale status message
     if code == KeyCode::Char('q') {
         return true;
+    }
+    if code == KeyCode::Char(':') {
+        app.command = Some(CommandLine::default());
+        return false;
     }
 
     // `/` narrows the list plain keys drive, `?` the pane below it - the same
@@ -57,21 +116,18 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
 
     // Only another move of the top pane can safely leave a load pending:
     // anything else acts on the pane that load fills, so it has to finish first.
-    let moving = !ctrl
-        && (is_up(code)
-            || is_down(code)
-            || is_left(code)
-            || is_right(code)
-            || matches!(code, KeyCode::PageUp | KeyCode::PageDown));
+    let moving = !ctrl && (is_up(code) || is_down(code) || is_left(code) || is_right(code));
     if app.pending && !moving {
         app.settle();
     }
 
+    let steps = app.accel.steps(code, ctrl);
     match app.level {
-        Level::Repos => repos_key(app, code, ctrl, terminal),
-        Level::Branches => branches_key(app, code, ctrl, terminal),
-        Level::Commits => commits_key(app, code, ctrl, terminal),
-        Level::Diff => diff_key(app, code, ctrl, terminal),
+        Level::Repos => repos_key(app, code, ctrl, steps),
+        Level::Branches => branches_key(app, code, ctrl, steps),
+        Level::Tags => tags_key(app, code, ctrl, steps),
+        Level::Commits => commits_key(app, code, ctrl, steps),
+        Level::Diff => diff_key(app, code, ctrl, steps, terminal),
     }
 }
 
@@ -109,44 +165,22 @@ fn query_key(app: &mut App, pane: Pane, code: KeyCode) {
     app.refilter(pane);
 }
 
-/// The paging keys, the same at every list level: PageUp/PageDown move the list
-/// plain keys drive, Ctrl-d/u half-page the pane below it, which is what Ctrl
-/// already means everywhere else. Returns whether the top pane moved, or None
-/// when the key was not one of these.
-fn paging(
-    code: KeyCode,
-    ctrl: bool,
-    terminal: &DefaultTerminal,
-    top: &mut Sel,
-    bottom: &mut Sel,
-) -> Option<bool> {
-    let half = half_page(terminal) as usize;
-    let page = upper_pane_height(terminal) as usize;
-    if ctrl && code == KeyCode::Char('d') {
-        bottom.jump(true, half);
-        Some(false)
-    } else if ctrl && code == KeyCode::Char('u') {
-        bottom.jump(false, half);
-        Some(false)
-    } else if code == KeyCode::PageDown {
-        Some(top.jump(true, page))
-    } else if code == KeyCode::PageUp {
-        Some(top.jump(false, page))
-    } else {
-        None
-    }
-}
-
 /// Repos on top, the selected repo's branches below.
-fn repos_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &DefaultTerminal) -> bool {
-    if let Some(moved) = paging(code, ctrl, terminal, &mut app.rsel, &mut app.bsel) {
-        app.pending |= moved;
+fn repos_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
+    if !ctrl && matches!(code, KeyCode::Char('s' | 'S')) {
+        let pull = code == KeyCode::Char('S');
+        app.set_status(if pull {
+            "pulling every repo…"
+        } else {
+            "syncing every repo…"
+        });
+        app.sync_next = Some(pull);
         return false;
     }
     if ctrl && (is_down(code) || is_up(code)) {
-        app.bsel.step(is_down(code));
+        app.bsel.step(is_down(code), steps);
     } else if is_down(code) || is_up(code) {
-        if app.rsel.step(is_down(code)) {
+        if app.rsel.step(is_down(code), steps) {
             app.pending = true;
         }
     } else if !ctrl && (is_left(code) || is_right(code)) {
@@ -164,15 +198,27 @@ fn repos_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &DefaultTermina
 }
 
 /// Branches on top, the selected branch's commits below.
-fn branches_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &DefaultTerminal) -> bool {
-    if let Some(moved) = paging(code, ctrl, terminal, &mut app.bsel, &mut app.csel) {
-        app.pending |= moved;
+fn branches_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
+    if !ctrl && code == KeyCode::Char('d') {
+        app.ask_delete_branch();
+        return false;
+    }
+    if !ctrl && code == KeyCode::Char('u') {
+        if app.undo.as_ref().is_some_and(|u| u.branch) {
+            app.undo();
+        }
+        return false;
+    }
+    if !ctrl && matches!(code, KeyCode::Char('s' | 'S')) {
+        let pull = code == KeyCode::Char('S');
+        app.set_status(if pull { "pulling…" } else { "syncing…" });
+        app.sync_next = Some(pull);
         return false;
     }
     if ctrl && (is_down(code) || is_up(code)) {
-        app.csel.step(is_down(code));
+        app.csel.step(is_down(code), steps);
     } else if is_down(code) || is_up(code) {
-        if app.bsel.step(is_down(code)) {
+        if app.bsel.step(is_down(code), steps) {
             app.pending = true;
         }
     } else if !ctrl && (is_left(code) || is_right(code)) {
@@ -189,16 +235,48 @@ fn branches_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &DefaultTerm
     false
 }
 
-/// Commits on top, the selected commit's files below.
-fn commits_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &DefaultTerminal) -> bool {
-    if let Some(moved) = paging(code, ctrl, terminal, &mut app.csel, &mut app.fsel) {
-        app.pending |= moved;
+/// Tags on top, the selected tag's own commits below.
+fn tags_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
+    if !ctrl && code == KeyCode::Char('d') {
+        app.ask_delete_tag();
+        return false;
+    }
+    if !ctrl && code == KeyCode::Char('u') {
+        if app.undo.as_ref().is_some_and(|u| !u.branch) {
+            app.undo();
+        }
+        return false;
+    }
+    if !ctrl && code == KeyCode::Char('t') {
+        app.offer_tracking();
         return false;
     }
     if ctrl && (is_down(code) || is_up(code)) {
-        app.fsel.step(is_down(code));
+        app.csel.step(is_down(code), steps);
     } else if is_down(code) || is_up(code) {
-        if app.csel.step(is_down(code)) {
+        if app.tsel.step(is_down(code), steps) {
+            app.pending = true;
+        }
+    } else if !ctrl && (is_left(code) || is_right(code)) {
+        if app.tsel.slide(is_right(code), tags::SCOPES.len()) {
+            app.rescope_tags();
+            app.pending = true;
+        }
+    } else if is_open(code) && !app.csel.is_empty() {
+        app.level = Level::Commits;
+        app.enter_commit();
+    } else if is_back(code) {
+        return app.back();
+    }
+    false
+}
+
+/// Commits on top, the selected commit's files below.
+fn commits_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
+    if ctrl && (is_down(code) || is_up(code)) {
+        app.fsel.step(is_down(code), steps);
+    } else if is_down(code) || is_up(code) {
+        if app.csel.step(is_down(code), steps) {
             app.pending = true;
         }
     } else if !ctrl && (is_left(code) || is_right(code)) {
@@ -215,26 +293,22 @@ fn commits_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &DefaultTermi
 }
 
 /// The file's diff, with the commit list kept above it for context.
-fn diff_key(app: &mut App, code: KeyCode, ctrl: bool, terminal: &mut DefaultTerminal) -> bool {
-    if ctrl && is_down(code) {
-        app.scroll_diff(App::STEP);
-    } else if ctrl && is_up(code) {
-        app.scroll_diff(-App::STEP);
-    } else if ctrl && code == KeyCode::Char('d') {
-        app.scroll_diff(App::half_page(terminal));
-    } else if ctrl && code == KeyCode::Char('u') {
-        app.scroll_diff(-App::half_page(terminal));
-    } else if code == KeyCode::PageDown {
-        app.scroll_diff(App::PAGE);
-    } else if code == KeyCode::PageUp {
-        app.scroll_diff(-App::PAGE);
+fn diff_key(
+    app: &mut App,
+    code: KeyCode,
+    ctrl: bool,
+    steps: usize,
+    terminal: &mut DefaultTerminal,
+) -> bool {
+    if ctrl && (is_down(code) || is_up(code)) {
+        app.scroll_diff(is_down(code), steps);
     } else if ctrl && (is_left(code) || is_right(code)) {
-        app.pan_diff(is_right(code));
+        app.pan_diff(is_right(code), steps);
     } else if is_open(code) {
         app.difftool(terminal);
     } else if is_back(code) {
         return app.back();
     }
-    app.clamp_diff(terminal);
+    app.clamp_diff();
     false
 }

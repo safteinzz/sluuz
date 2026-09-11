@@ -1,5 +1,5 @@
-# Branches: which are unpushed, which are finished, and deleting the finished
-# ones where they stand.
+# Branches: which are unpushed, which are finished, and deleting a finished one
+# where it stands. The cross-repo `slu tidy` is a still, from plain.tape.
 #
 #   ./render.sh branches
 
@@ -26,21 +26,20 @@ Sleep 2s
 Type "cd edge-proxy && clear"
 Enter
 Sleep 600ms
-Show
-Sleep 400ms
-
 # ---- what is pushed and what is not --------------------------------------
+Show
+Sleep 300ms
 Type "slu ibranch"
 Enter
 Sleep 2.5s
-# h/l slides the list between local, all and remote
+# h/l moves between the tabs: yours, the remote's, and the finished ones
 Type "l"
-Sleep 1.8s
-Type "l"
-Sleep 1.8s
-Type "h"
-Type "h"
 Sleep 1.5s
+Type "l"
+Sleep 1.8s
+Type "h"
+Type "h"
+Sleep 1.2s
 # `/` narrows the list the plain keys drive, `?` the commits under it, and both
 # say on their own title which key opened them
 Type "/"
@@ -55,30 +54,21 @@ Type "health"
 Sleep 1.8s
 Escape
 Sleep 600ms
-Type "q"
+# d on a branch that was never pushed wants its name typed: its commits exist
+# nowhere else. Esc backs out
+Type "d"
+Sleep 2.8s
+Escape
+Sleep 600ms
+Type "j"
+Type "j"
 Sleep 800ms
-
-# ---- finished branches, across every repo, then deleted in place ----------
-Hide
-Type "clear"
-Enter
-Sleep 400ms
-Show
-Sleep 300ms
-# -a keeps the already-clean repos in the report, which is what makes the sweep
-# visible: five repos with nothing to clean up, one with four finished branches
-Type "slu tidy -a .."
-Enter
-Sleep 3.5s
-Type "slu itidy"
-Enter
-Sleep 2.2s
-Enter
-Sleep 1.5s
-# the confirm opens on No, so a second enter would cancel; Yes is one step left
-Left
+# a gone one gets the confirm, which opens on No; Yes is one step left
+Type "d"
 Sleep 1.2s
+Left
+Sleep 1s
 Enter
 Sleep 2s
 Type "q"
-Sleep 1.5s
+Sleep 500ms
