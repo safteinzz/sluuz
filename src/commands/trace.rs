@@ -2,11 +2,13 @@
 //!
 //! Deliberately NOT named `log`: sluuz never shadows a real git command, so
 //! `slu log` still passes straight through to git. `trace` is the enhanced view:
-//! an aligned, colorized list (hash · full date · relative time · subject ·
-//! author). `--graph` keeps git's own commit graph (which we don't try to
+//! an aligned, colorized list (hash · full date · relative time · author ·
+//! refs · subject). `--graph` keeps git's own commit graph (which we don't try to
 //! out-render) but enriches the per-commit line.
 
+use crate::git::load::{DECORATE, RefKind, RefLabel, fit_refs, parse_refs};
 use crate::git::{SEP, git_capture};
+use crate::tui::widgets::MIN_SUBJECT;
 use colored::Colorize;
 
 /// Committer name is capped at this width (long names get truncated).
@@ -45,14 +47,22 @@ struct Row {
     date: String,
     rel: String,
     committer: String,
+    refs: Vec<RefLabel>,
     subject: String,
 }
 
 /// The flat aligned view (no graph).
 fn pretty_log(all: bool, limit: usize) {
     let n = limit.to_string();
-    let fmt = format!("--pretty=format:%h{SEP}%ad{SEP}%ar{SEP}%cn{SEP}%s");
-    let mut args = vec!["log", "-n", &n, "--date=format:%Y-%m-%d %H:%M", &fmt];
+    let fmt = format!("--pretty=format:%h{SEP}%ad{SEP}%ar{SEP}%cn{SEP}%D{SEP}%s");
+    let mut args = vec![
+        "log",
+        "-n",
+        &n,
+        "--date=format:%Y-%m-%d %H:%M",
+        DECORATE,
+        &fmt,
+    ];
     if all {
         args.push("--all");
     }
@@ -79,12 +89,13 @@ fn pretty_log(all: bool, limit: usize) {
 /// flat view exactly. Graph-only lines (`|\`, `|/`) are passed through as-is.
 fn graph_log(all: bool, limit: usize) {
     let n = limit.to_string();
-    let fmt = format!("--pretty=format:{REC}%h{SEP}%ad{SEP}%ar{SEP}%cn{SEP}%s");
+    let fmt = format!("--pretty=format:{REC}%h{SEP}%ad{SEP}%ar{SEP}%cn{SEP}%D{SEP}%s");
     let mut args = vec![
         "log",
         "--graph",
         "--color=never",
         "--date=format:%Y-%m-%d %H:%M",
+        DECORATE,
         "-n",
         &n,
         &fmt,
@@ -132,6 +143,7 @@ fn parse_row(line: &str) -> Option<Row> {
         date: f.next()?.to_string(),
         rel: f.next()?.to_string(),
         committer: f.next()?.to_string(),
+        refs: parse_refs(f.next()?),
         subject: f.next().unwrap_or("").to_string(),
     })
 }
@@ -141,30 +153,71 @@ fn rel_width<'a>(rows: impl Iterator<Item = &'a Row>) -> usize {
     rows.map(|r| r.rel.chars().count() + 2).max().unwrap_or(0)
 }
 
-/// Render one commit: `<rail>hash  date  (relative)  <committer> subject`.
+/// Render one commit: `<rail>hash  date  (relative)  <committer> (refs) subject`.
 /// The relative token is right-aligned as a whole, so padding lands *before*
-/// the `(` - "(2 days ago)" / "   (10 days ago)". Subject is truncated to fit.
+/// the `(` - "(2 days ago)" / "   (10 days ago)". Refs take only what leaves
+/// the subject `MIN_SUBJECT` columns, and the subject is truncated to fit.
 fn print_row(rail: &str, r: &Row, rel_w: usize, width: usize) {
     let who = truncate(&r.committer, NAME_MAX);
-
-    // Plain (uncolored) width of everything left of the subject, so truncation
-    // accounts for the graph rail too.
-    let left = rail.chars().count() + 7 + 2 + 16 + 2 + rel_w + 2 + who.chars().count() + 3;
-    let subject = truncate(&r.subject, width.saturating_sub(left).max(10));
-
     let hash = format!("{:<7}", r.hash);
+
+    // Plain (uncolored) width of everything left of the refs, so truncation
+    // accounts for the graph rail too.
+    let left = rail.chars().count()
+        + hash.chars().count()
+        + 2
+        + 16
+        + 2
+        + rel_w
+        + 2
+        + who.chars().count()
+        + 3;
+    let (refs, refs_w) = ref_labels(&r.refs, width.saturating_sub(left + MIN_SUBJECT));
+    let subject = truncate(&r.subject, width.saturating_sub(left + refs_w).max(10));
+
     let rel_token = format!("({})", r.rel);
     let rel = format!("{rel_token:>rel_w$}");
     let who = format!("<{who}>");
 
     println!(
-        "{rail}{}  {}  {}  {} {}",
+        "{rail}{}  {}  {}  {} {refs}{}",
         hash.yellow(),
         r.date.green(),
         rel.magenta(),
         who.blue(),
         subject
     );
+}
+
+/// `(HEAD -> main, origin/main, +2) ` in `git log --decorate`'s colours, as
+/// many labels as `room` holds, and its width uncoloured; empty when no ref
+/// points here.
+fn ref_labels(refs: &[RefLabel], room: usize) -> (String, usize) {
+    if refs.is_empty() {
+        return (String::new(), 0);
+    }
+    let (kept, hidden) = fit_refs(refs, room);
+    let mut width = 3 + 2 * kept.len().saturating_sub(1);
+    let mut painted: Vec<String> = kept
+        .into_iter()
+        .map(|(kind, text)| {
+            width += text.chars().count();
+            match kind {
+                RefKind::Head | RefKind::Detached => text.cyan(),
+                RefKind::Branch => text.green(),
+                RefKind::Remote => text.red(),
+                RefKind::Tag => text.yellow(),
+            }
+            .bold()
+            .to_string()
+        })
+        .collect();
+    if hidden > 0 {
+        let more = format!("+{hidden}");
+        width += 2 + more.len();
+        painted.push(more.dimmed().to_string());
+    }
+    (format!("({}) ", painted.join(", ")), width)
 }
 
 fn term_width() -> usize {

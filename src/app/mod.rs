@@ -14,6 +14,7 @@ mod branches;
 mod commits;
 mod delete;
 mod diff;
+mod inspect;
 mod keys;
 mod repos;
 mod tags;

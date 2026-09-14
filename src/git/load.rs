@@ -72,7 +72,103 @@ pub struct Commit {
     pub short: String,
     pub date: String,
     pub committer: String,
+    pub refs: Vec<RefLabel>,
     pub subject: String,
+}
+
+/// A ref pointing at a commit, named the way `git log --decorate` names it.
+pub struct RefLabel {
+    pub kind: RefKind,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RefKind {
+    /// The checked-out branch.
+    Head,
+    /// `HEAD` itself, when it names no branch.
+    Detached,
+    Branch,
+    Remote,
+    Tag,
+}
+
+impl RefLabel {
+    /// What git prints for it: `HEAD -> main`, `origin/main`, `tag: v1`.
+    pub fn text(&self) -> String {
+        match self.kind {
+            RefKind::Head => format!("HEAD -> {}", self.name),
+            RefKind::Detached => "HEAD".to_string(),
+            RefKind::Branch | RefKind::Remote => self.name.clone(),
+            RefKind::Tag => format!("tag: {}", self.name),
+        }
+    }
+}
+
+/// The labels that fit in `room` columns once drawn as `(a, b, +2) `: whole
+/// labels in git's order, then how many were left off. The first is always
+/// kept, cut short with `…` when it alone is too wide, so a commit never looks
+/// like it has no refs.
+pub fn fit_refs(refs: &[RefLabel], room: usize) -> (Vec<(RefKind, String)>, usize) {
+    let more = |left: usize| {
+        if left == 0 {
+            0
+        } else {
+            3 + left.to_string().len()
+        }
+    };
+    let mut kept = Vec::new();
+    let mut used = 3;
+    for (i, r) in refs.iter().enumerate() {
+        let text = r.text();
+        let sep = if i == 0 { 0 } else { 2 };
+        let len = text.chars().count();
+        if used + sep + len + more(refs.len() - i - 1) > room {
+            if i == 0 {
+                let fit = room.saturating_sub(used + more(refs.len() - 1)).max(2);
+                let cut: String = text.chars().take(fit - 1).collect();
+                kept.push((r.kind, format!("{cut}…")));
+            }
+            break;
+        }
+        used += sep + len;
+        kept.push((r.kind, text));
+    }
+    let hidden = refs.len() - kept.len();
+    (kept, hidden)
+}
+
+/// The log flag `parse_refs` needs: full names are what tell a local branch
+/// called `origin/x` from the remote's `x`.
+pub const DECORATE: &str = "--decorate=full";
+
+/// `%D` back into labels. Only branches, remote branches and tags are kept:
+/// the stash and `itag`'s copy of remote tags are not something a log reader
+/// asked about, and `origin/HEAD` only repeats the remote's default branch.
+pub fn parse_refs(d: &str) -> Vec<RefLabel> {
+    d.split(", ")
+        .filter_map(|r| {
+            let (kind, name) = if let Some(b) = r.strip_prefix("HEAD -> refs/heads/") {
+                (RefKind::Head, b)
+            } else if r == "HEAD" {
+                (RefKind::Detached, r)
+            } else if let Some(b) = r.strip_prefix("refs/heads/") {
+                (RefKind::Branch, b)
+            } else if let Some(t) = r.strip_prefix("tag: refs/tags/") {
+                (RefKind::Tag, t)
+            } else if let Some(b) = r.strip_prefix("refs/remotes/")
+                && !b.ends_with("/HEAD")
+            {
+                (RefKind::Remote, b)
+            } else {
+                return None;
+            };
+            Some(RefLabel {
+                kind,
+                name: name.to_string(),
+            })
+        })
+        .collect()
 }
 
 pub struct FileEntry {
@@ -149,6 +245,59 @@ pub fn first_commit(repo: &str, extra: &[&str]) -> String {
     git_capture(repo, &args).unwrap_or_default()
 }
 
+/// What a commit row has no room for: both people, its parents, the whole
+/// message.
+pub struct CommitDetails {
+    /// `name <email>`, and when, both dated and relative.
+    pub author: String,
+    pub authored: String,
+    pub committer: String,
+    pub committed: String,
+    /// Short hashes; more than one is a merge.
+    pub parents: Vec<String>,
+    pub message: String,
+}
+
+pub fn commit_details(repo: &str, rev: &str) -> Option<CommitDetails> {
+    let fmt = format!("--format=%an <%ae>{SEP}%ad (%ar){SEP}%cn <%ce>{SEP}%cd (%cr){SEP}%p{SEP}%B");
+    let out = git_capture(
+        repo,
+        &["show", "-s", "--date=format:%Y-%m-%d %H:%M", &fmt, rev],
+    )?;
+    let mut f = out.split(SEP);
+    Some(CommitDetails {
+        author: f.next()?.to_string(),
+        authored: f.next()?.to_string(),
+        committer: f.next()?.to_string(),
+        committed: f.next()?.to_string(),
+        parents: f.next()?.split_whitespace().map(str::to_string).collect(),
+        message: f.next().unwrap_or("").trim().to_string(),
+    })
+}
+
+/// An annotated tag's tagger (`name <email>`) and whole message; None for a
+/// lightweight one, which has neither.
+pub fn tag_details(repo: &str, name: &str) -> Option<(String, String)> {
+    let fmt = format!("--format=%(taggername) %(taggeremail){SEP}%(contents)");
+    let tag = format!("refs/tags/{name}");
+    let out = git_capture(repo, &["for-each-ref", &fmt, &tag])?;
+    let (tagger, message) = out.split_once(SEP)?;
+    let tagger = tagger.trim();
+    (!tagger.is_empty()).then(|| (tagger.to_string(), message.trim().to_string()))
+}
+
+/// Every remote and the URL it fetches from.
+pub fn remote_urls(repo: &str) -> Vec<(String, String)> {
+    let out = git_capture(repo, &["remote", "-v"]).unwrap_or_default();
+    out.lines()
+        .filter(|l| l.ends_with("(fetch)"))
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            Some((f.next()?.to_string(), f.next()?.to_string()))
+        })
+        .collect()
+}
+
 /// One `--pretty=format:` line back into a `Commit`.
 fn parse_commit(line: &str) -> Option<Commit> {
     let mut f = line.split(SEP);
@@ -157,6 +306,7 @@ fn parse_commit(line: &str) -> Option<Commit> {
         short: f.next()?.to_string(),
         date: f.next()?.to_string(),
         committer: f.next()?.to_string(),
+        refs: parse_refs(f.next()?),
         subject: f.next().unwrap_or("").to_string(),
     })
 }
@@ -356,12 +506,13 @@ fn log_rows(
     tx: &Sender<Batch>,
 ) {
     let n = limit.to_string();
-    let fmt = format!("--pretty=format:%H{SEP}%h{SEP}%ad{SEP}%cn{SEP}%s");
+    let fmt = format!("--pretty=format:%H{SEP}%h{SEP}%ad{SEP}%cn{SEP}%D{SEP}%s");
     let mut argv = vec![
         "log",
         "-n",
         n.as_str(),
         "--date=format:%Y-%m-%d %H:%M",
+        DECORATE,
         fmt.as_str(),
     ];
     argv.extend(args.iter().map(String::as_str));
@@ -749,8 +900,8 @@ pub fn commit_diff_ctx(repo: &str, hash: &str, path: &str) -> DiffContext {
 
 #[cfg(test)]
 mod tests {
+    use super::{DECORATE, RefKind, RefLabel, fit_refs, parse_refs, tag_copy, tag_rule};
     use super::{RemoteTags, ask, landed, load_branches, load_diff_raw, load_files, load_tags};
-    use super::{tag_copy, tag_rule};
     use crate::git::git_capture;
     use std::fs;
     use std::path::PathBuf;
@@ -923,5 +1074,93 @@ mod tests {
         );
         let tags: Vec<String> = load_tags(repo.path()).into_iter().map(|t| t.name).collect();
         assert_eq!(tags, ["v1"], "the tag should read as `v1`");
+    }
+
+    #[test]
+    fn a_log_labels_only_branches_remotes_and_tags() {
+        // Every kind of ref git decorates with, on one commit, read the way the
+        // log views read them. A local branch named like a remote one is the
+        // case short names cannot tell apart.
+        let repo = TempRepo::new("refs");
+        repo.commit("f", "a", "one");
+        repo.git(&["branch", "origin/lookalike"]);
+        repo.git(&["tag", "v1"]);
+        repo.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        repo.git(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ]);
+        repo.git(&["update-ref", "refs/remote-tags/origin/v1", "HEAD"]);
+        repo.git(&["update-ref", "refs/stash", "HEAD"]);
+        let head = git_capture(repo.path(), &["symbolic-ref", "--short", "HEAD"]).expect("HEAD");
+
+        let d = git_capture(repo.path(), &["log", "-1", "--format=%D", DECORATE]).expect("log");
+        let mut got: Vec<(RefKind, String)> = parse_refs(&d)
+            .into_iter()
+            .map(|r| (r.kind, r.name))
+            .collect();
+        got.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let mut want = vec![
+            (RefKind::Head, head),
+            (RefKind::Branch, "origin/lookalike".to_string()),
+            (RefKind::Remote, "origin/main".to_string()),
+            (RefKind::Tag, "v1".to_string()),
+        ];
+        want.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(
+            got, want,
+            "from `{d}`: the stash, origin/HEAD and refs/remote-tags should be left out"
+        );
+    }
+
+    #[test]
+    fn ref_labels_never_run_past_their_room_and_keep_the_first() {
+        let refs: Vec<RefLabel> = [
+            (RefKind::Head, "feature/a-rather-long-branch-name"),
+            (RefKind::Remote, "origin/feature/a-rather-long-branch-name"),
+            (RefKind::Tag, "v2.2.0-rc.1"),
+            (RefKind::Branch, "main"),
+        ]
+        .into_iter()
+        .map(|(kind, name)| RefLabel {
+            kind,
+            name: name.to_string(),
+        })
+        .collect();
+
+        for room in 12..160 {
+            let (kept, hidden) = fit_refs(&refs, room);
+            // `(a, b, +2) `
+            let drawn = 3
+                + kept.iter().map(|(_, t)| t.chars().count()).sum::<usize>()
+                + 2 * (kept.len() - 1)
+                + if hidden > 0 {
+                    3 + hidden.to_string().len()
+                } else {
+                    0
+                };
+            assert!(
+                !kept.is_empty(),
+                "room {room}: the first label went missing"
+            );
+            assert_eq!(
+                kept.len() + hidden,
+                refs.len(),
+                "room {room}: labels lost count"
+            );
+            assert!(
+                drawn <= room,
+                "room {room}: drew {drawn} columns from {kept:?} +{hidden}"
+            );
+            for (i, (_, text)) in kept.iter().enumerate().skip(1) {
+                assert_eq!(
+                    *text,
+                    refs[i].text(),
+                    "room {room}: only the first may be cut"
+                );
+            }
+        }
     }
 }

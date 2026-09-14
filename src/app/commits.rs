@@ -6,9 +6,18 @@ use crate::git::load::{self, Commit, FileEntry};
 use std::collections::HashSet;
 
 /// Everything about a commit a filter can match: its sha (so a short one is a
-/// prefix of the long one), when it landed, who made it and what it says.
+/// prefix of the long one), when it landed, who made it, the refs on it and
+/// what it says.
 fn haystack(c: &Commit) -> String {
-    format!("{} {} {} {}", c.hash, c.date, c.committer, c.subject)
+    let refs: Vec<String> = c.refs.iter().map(|r| r.text()).collect();
+    format!(
+        "{} {} {} {} {}",
+        c.hash,
+        c.date,
+        c.committer,
+        refs.join(" "),
+        c.subject
+    )
 }
 
 /// A changed file matches on its path and on its status letter.

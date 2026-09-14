@@ -121,6 +121,11 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
         app.settle();
     }
 
+    if !ctrl && code == KeyCode::Char('K') {
+        app.inspect();
+        return false;
+    }
+
     let steps = app.accel.steps(code, ctrl);
     match app.level {
         Level::Repos => repos_key(app, code, ctrl, steps),

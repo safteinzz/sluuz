@@ -78,7 +78,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             );
             list(frame, top, items, top_title, true, &mut app.bsel);
 
-            let items = commit_items(app);
+            let items = commit_items(app, bottom.width);
             let slow = app.cfeed.slow();
             let bot_title = title(
                 "commits",
@@ -111,7 +111,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             }
             list(frame, top, items, top_title, true, &mut app.tsel);
 
-            let items = commit_items(app);
+            let items = commit_items(app, bottom.width);
             // A tag only the remote has names a commit this clone may not have,
             // and "(none)" would read as a tag with nothing in it.
             let unfetched = app.csel.is_empty()
@@ -134,7 +134,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Level::Commits => {
             let labels = stops(&commits::SCOPES, commits::Scope::label);
             let scope = Some((labels.as_slice(), app.csel.scope));
-            let items = commit_items(app);
+            let items = commit_items(app, top.width);
             let slow = app.cfeed.slow();
             let top_title = title(
                 &commits_label(app),
@@ -157,7 +157,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Level::Diff => {
             let labels = stops(&commits::SCOPES, commits::Scope::label);
             let scope = Some((labels.as_slice(), app.csel.scope));
-            let items = commit_items(app);
+            let items = commit_items(app, top.width);
             let slow = app.cfeed.slow();
             let top_title = title(
                 &commits_label(app),
@@ -239,6 +239,7 @@ fn actions(app: &App) -> Vec<String> {
         }
         _ => {}
     }
+    keys.push("K inspect".to_string());
     if app.level != Level::Diff {
         keys.push("r refresh".to_string());
     }
@@ -258,6 +259,7 @@ fn help(app: &App) -> Vec<(String, String)> {
             row(CTRL_Y_MOVE, "scroll the diff"),
             row(CTRL_X_MOVE, "pan it sideways"),
             row("enter", "open the file in your git difftool"),
+            row("K", "everything about the commit"),
             row("esc", "back to the commits"),
             row("q", "quit"),
         ];
@@ -298,6 +300,7 @@ fn help(app: &App) -> Vec<(String, String)> {
         _ => {}
     }
     rows.extend([
+        row("K", "everything about the row under the cursor"),
         row("r", "read it again from git"),
         row("esc", "back"),
         row("q", "quit"),
@@ -698,16 +701,18 @@ fn loading_body() -> Vec<ListItem<'static>> {
     )))]
 }
 
-fn commit_items(app: &App) -> Vec<ListItem<'static>> {
+/// `width` is the pane's, which a row gives up two borders and the cursor to.
+fn commit_items(app: &App, width: u16) -> Vec<ListItem<'static>> {
     if app.csel.is_empty() && app.cfeed.slow() {
         return loading_body();
     }
+    let row = (width as usize).saturating_sub(4);
     app.csel
         .visible
         .iter()
         .map(|&i| {
             let c = &app.commits[i];
-            commit_item(c, app.unpushed.contains(&c.hash))
+            commit_item(c, app.unpushed.contains(&c.hash), row)
         })
         .collect()
 }

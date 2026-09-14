@@ -1,7 +1,7 @@
 //! Row renderers, pane furniture and the modal box: what every view draws
 //! with, none of it knowing which view is drawing.
 
-use crate::git::load::{Commit, FileEntry};
+use crate::git::load::{Commit, FileEntry, RefKind, RefLabel, fit_refs};
 use crate::tui::clamp_scroll;
 use crate::tui::input::{X_MOVE, is_back, is_down, is_up};
 use ratatui::Frame;
@@ -15,9 +15,11 @@ use ratatui::widgets::{
 };
 use std::time::Duration;
 
-/// Render a commit row. `unpushed` prepends a yellow `↑` marker (this commit is
-/// on no remote yet); pushed commits get an aligning blank so columns line up.
-pub fn commit_item(c: &Commit, unpushed: bool) -> ListItem<'static> {
+/// Render a commit row `width` columns wide. `unpushed` prepends a yellow `↑`
+/// marker (this commit is on no remote yet); pushed commits get an aligning
+/// blank so columns line up. Refs take only what leaves the subject
+/// `MIN_SUBJECT` columns.
+pub fn commit_item(c: &Commit, unpushed: bool, width: usize) -> ListItem<'static> {
     let mark = if unpushed {
         Span::styled(
             "↑ ",
@@ -28,10 +30,10 @@ pub fn commit_item(c: &Commit, unpushed: bool) -> ListItem<'static> {
     } else {
         Span::raw("  ")
     };
-    ListItem::new(Line::from(vec![
+    let mut spans = vec![
         mark,
         Span::styled(
-            format!("{:<8}", c.short),
+            format!("{:<7} ", c.short),
             Style::default().fg(Color::Yellow),
         ),
         Span::styled(format!("{}  ", c.date), Style::default().fg(Color::Green)),
@@ -39,8 +41,49 @@ pub fn commit_item(c: &Commit, unpushed: bool) -> ListItem<'static> {
             format!("<{}> ", c.committer),
             Style::default().fg(Color::Blue),
         ),
-        Span::raw(c.subject.clone()),
-    ]))
+    ];
+    let left: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let room = width.saturating_sub(left + MIN_SUBJECT);
+    spans.extend(ref_spans(&c.refs, room));
+    spans.push(Span::raw(c.subject.clone()));
+    ListItem::new(Line::from(spans))
+}
+
+/// Columns a commit's subject keeps however many refs point at it.
+pub const MIN_SUBJECT: usize = 20;
+
+/// `(HEAD -> main, origin/main, +2) ` in `git log --decorate`'s colours, as
+/// many labels as `room` holds, or nothing when no ref points here.
+fn ref_spans(refs: &[RefLabel], room: usize) -> Vec<Span<'static>> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let (kept, hidden) = fit_refs(refs, room);
+    let mut spans = vec![Span::raw("(")];
+    for (i, (kind, text)) in kept.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(", "));
+        }
+        let colour = match kind {
+            RefKind::Head | RefKind::Detached => Color::Cyan,
+            RefKind::Branch => Color::Green,
+            RefKind::Remote => Color::Red,
+            RefKind::Tag => Color::Yellow,
+        };
+        spans.push(Span::styled(
+            text,
+            Style::default().fg(colour).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if hidden > 0 {
+        spans.push(Span::raw(", "));
+        spans.push(Span::styled(
+            format!("+{hidden}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans.push(Span::raw(") "));
+    spans
 }
 
 pub fn file_item(f: &FileEntry) -> ListItem<'static> {
@@ -317,6 +360,15 @@ impl Modal {
             colour: Color::Cyan,
             keys: "j/k ↑↓ scroll · esc close",
         }
+    }
+
+    /// Free text under a reader's rows, a blank line apart: a message, which
+    /// wraps on its own rather than hanging under the rows' second column.
+    pub fn with_text(mut self, text: &str) -> Modal {
+        if !text.is_empty() {
+            self.body = format!("{}\n\n{text}", self.body);
+        }
+        self
     }
 
     /// Handle one key while the modal is up. Returns true when it was
