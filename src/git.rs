@@ -15,16 +15,47 @@ use walkdir::WalkDir;
 pub const SEP: char = '\u{1f}';
 
 /// Find all git repositories under `base`, searching up to `max_depth` levels deep.
-/// Returns each repo's root directory (the parent of its `.git` directory).
+/// Returns each repo's root directory (the parent of its `.git`, which is a file
+/// in a worktree or a submodule). When there are none and `base` sits inside a
+/// repo, that repo is the answer, so running from one of its subfolders still
+/// finds it.
 pub fn find_repos(base: &Path, max_depth: usize) -> Vec<PathBuf> {
-    WalkDir::new(base)
+    let found: Vec<PathBuf> = WalkDir::new(base)
         .max_depth(max_depth)
         .follow_links(false)
         .into_iter()
         .filter_map(|entry| entry.ok()) // skip permission errors
-        .filter(|entry| entry.file_name() == ".git" && entry.file_type().is_dir())
-        .filter_map(|entry| entry.path().parent().map(Path::to_path_buf)) // .git → repo root
+        .filter(|entry| entry.file_name() == ".git")
+        .filter_map(|entry| entry.path().parent().map(Path::to_path_buf))
+        .collect();
+    if !found.is_empty() {
+        return found;
+    }
+    base.to_str()
+        .and_then(|b| git_capture(b, &["rev-parse", "--show-toplevel"]))
+        .map(PathBuf::from)
+        .into_iter()
         .collect()
+}
+
+/// `find_repos` for a command that has nothing to do without one: finding none
+/// ends it, on stderr and with a failing exit, since an empty report would read
+/// as "all clean".
+pub fn repos_or_exit(base: &Path, max_depth: usize) -> Vec<PathBuf> {
+    let repos = find_repos(base, max_depth);
+    if repos.is_empty() {
+        eprintln!("{}", no_repos(base, max_depth));
+        std::process::exit(1);
+    }
+    repos
+}
+
+/// What finding no repos says, wherever it is found.
+pub fn no_repos(base: &Path, max_depth: usize) -> String {
+    format!(
+        "no git repos in or under `{}` (looked {max_depth} levels down) - run it inside a repo, or point it at a folder that holds some",
+        base.display()
+    )
 }
 
 /// One repo's working-tree state: what `slu repos` prints as a row and what the
@@ -237,7 +268,7 @@ pub fn git_run(repo: &str, args: &[&str]) -> (bool, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{git_capture, prunes_on_fetch, short_remote};
+    use super::{find_repos, git_capture, prunes_on_fetch, short_remote};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -354,5 +385,54 @@ mod tests {
     fn something_unparseable_comes_back_as_it_went_in() {
         assert_eq!(short_remote("weird"), "weird");
         assert_eq!(short_remote(""), "");
+    }
+
+    #[test]
+    fn a_scan_from_a_subfolder_finds_the_enclosing_repo() {
+        let dir = TempRepo::new("subfolder");
+        let deep = dir.0.join("app").join("src");
+        fs::create_dir_all(&deep).expect("subfolder");
+
+        let found: Vec<PathBuf> = find_repos(&deep, 3)
+            .iter()
+            .map(|p| p.canonicalize().expect("found repo exists"))
+            .collect();
+        let root = dir.0.canonicalize().expect("temp repo exists");
+        assert_eq!(
+            found,
+            [root],
+            "a scan from two folders down should find the repo above"
+        );
+    }
+
+    #[test]
+    fn a_worktree_counts_as_a_repo() {
+        // A worktree's `.git` is a file pointing back at the main repo.
+        let dir = TempRepo::new("worktree");
+        let repo = dir.path();
+        let author = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        let mut commit = author.to_vec();
+        commit.extend(["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_capture(repo, &commit).expect("commit");
+        let wt = dir.0.join("wt");
+        let wt_str = wt.to_str().expect("utf-8 temp path");
+        git_capture(repo, &["worktree", "add", "-q", "-b", "side", wt_str]).expect("worktree");
+
+        let found = find_repos(&dir.0, 3);
+        assert!(
+            found.contains(&wt),
+            "the worktree should be listed, got {found:?}"
+        );
+        assert!(
+            found.contains(&dir.0),
+            "and so should the repo it belongs to, got {found:?}"
+        );
     }
 }

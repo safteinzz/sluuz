@@ -5,7 +5,7 @@
 //! `slu each "log --oneline -1"`, `slu each switch main`. Whatever you'd type
 //! after `git`, it runs in each repo and prints the output grouped per repo.
 
-use crate::git::{display_name, find_repos, git_run};
+use crate::git::{display_name, git_run, repos_or_exit};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::Path;
@@ -25,11 +25,7 @@ struct Outcome {
 }
 
 pub fn run(args: Args) {
-    let repos = find_repos(Path::new("."), 3);
-    if repos.is_empty() {
-        println!("{}", "No git repos found.".dimmed());
-        return;
-    }
+    let repos = repos_or_exit(Path::new("."), 3);
 
     println!("{} {}\n", "git".dimmed(), args.args.join(" ").bold());
 

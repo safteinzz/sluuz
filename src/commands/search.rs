@@ -5,7 +5,7 @@
 //! multi-repo parallel search. The actual history walking lives in
 //! `crate::history`, shared with `scan`.
 
-use crate::git::{display_name, find_repos};
+use crate::git::{display_name, repos_or_exit};
 use crate::history::{self, CommitMatch};
 use colored::Colorize;
 use rayon::prelude::*;
@@ -29,7 +29,7 @@ pub fn run(args: Args) {
     println!("{} {}\n", "Searching for:".dimmed(), args.pattern.bold());
 
     let repos: Vec<PathBuf> = if args.recursive {
-        find_repos(Path::new("."), 10)
+        repos_or_exit(Path::new("."), 10)
     } else {
         vec![PathBuf::from(".")]
     };

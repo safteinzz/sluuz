@@ -5,7 +5,7 @@
 //! git's pickaxe (via `crate::history`) so it also catches secrets committed in
 //! binary/encrypted files, where a plain diff grep would see nothing.
 
-use crate::git::{display_name, find_repos};
+use crate::git::{display_name, repos_or_exit};
 use crate::history::{self, CommitMatch};
 use colored::Colorize;
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ pub fn run(args: Args) {
     println!("{}", format!("terms : {}", terms.join(", ")).dimmed());
     println!("{}\n", "━".repeat(56));
 
-    let repos = find_repos(&args.path, args.depth);
+    let repos = repos_or_exit(&args.path, args.depth);
 
     let mut total_repos = 0usize;
     let mut repos_with_hits = 0usize;

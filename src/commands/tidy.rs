@@ -12,7 +12,7 @@
 
 use crate::git::load;
 use crate::git::{
-    SEP, display_name, find_repos, first_line, git_capture, git_run, prunes_on_fetch,
+    SEP, display_name, first_line, git_capture, git_run, prunes_on_fetch, repos_or_exit,
 };
 use colored::Colorize;
 use rayon::prelude::*;
@@ -47,7 +47,7 @@ struct Branch {
 }
 
 pub fn run(args: Args) {
-    let repos = find_repos(&args.path, args.depth);
+    let repos = repos_or_exit(&args.path, args.depth);
 
     // Asked for fresh refs: prune every repo first, in parallel, since this is
     // one network round trip each and a tree of them is slow enough serially to

@@ -50,8 +50,8 @@ fn relative_name(repo: &Path, base: &Path) -> String {
         .ok()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_string_lossy().replace('\\', "/"))
-        // A path outside the scan root can't happen (find_repos walks under it),
-        // but fall back to the bare directory name rather than a full path.
+        // The repo a scan started inside of sits above the scan root: it gets
+        // its directory name rather than a full path.
         .unwrap_or_else(|| {
             repo.file_name()
                 .unwrap_or(repo.as_os_str())

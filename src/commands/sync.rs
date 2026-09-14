@@ -6,7 +6,7 @@
 //! the current branch when it safely can and refuses (rather than merging) when
 //! it can't - so it can't create merge commits or conflicts.
 
-use crate::git::{display_name, find_repos, first_line, git_run};
+use crate::git::{display_name, first_line, git_run, repos_or_exit};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -39,12 +39,7 @@ struct Outcome {
 }
 
 pub fn run(args: Args) {
-    let repos = find_repos(&args.path, args.depth);
-
-    if repos.is_empty() {
-        println!("{}", "No git repos found.".dimmed());
-        return;
-    }
+    let repos = repos_or_exit(&args.path, args.depth);
 
     println!(
         "{} {} repo(s)…\n",

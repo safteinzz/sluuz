@@ -7,6 +7,7 @@
 //! Esc steps back, and quits here.
 
 use crate::app::{App, repo_scope};
+use crate::git::no_repos;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
@@ -33,6 +34,9 @@ pub fn run(args: Args) {
 
     match App::at_repos(&args.path, args.depth, repo_scope(args.dirty)) {
         Some(app) => app.run("irepos"),
-        None => eprintln!("no git repos found under {}", args.path.display()),
+        None => {
+            eprintln!("{}", no_repos(&args.path, args.depth));
+            std::process::exit(1);
+        }
     }
 }

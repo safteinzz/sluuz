@@ -4,7 +4,7 @@
 //! far ahead/behind its upstream it is - so "which of my repos have uncommitted
 //! or unpushed work?" is one command instead of cd-ing through each.
 
-use crate::git::{RepoStatus, find_repos, repo_status};
+use crate::git::{RepoStatus, repo_status, repos_or_exit};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) {
-    let repos = find_repos(&args.path, args.depth);
+    let repos = repos_or_exit(&args.path, args.depth);
 
     let mut statuses: Vec<RepoStatus> = repos.par_iter().map(|r| repo_status(r)).collect();
 
