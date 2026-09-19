@@ -156,18 +156,9 @@ fn query_key(app: &mut App, pane: Pane, code: KeyCode) {
         app.editing = None;
         return;
     };
-    let end = sel.query.text.chars().count();
-    match code {
-        KeyCode::Char(c) => sel.query.insert(c),
-        KeyCode::Backspace => sel.query.backspace(),
-        KeyCode::Delete => sel.query.delete(),
-        KeyCode::Left => sel.query.caret = sel.query.caret.saturating_sub(1),
-        KeyCode::Right if sel.query.caret < end => sel.query.caret += 1,
-        KeyCode::Home => sel.query.caret = 0,
-        KeyCode::End => sel.query.caret = end,
-        _ => return,
+    if sel.query.on_key(code) {
+        app.refilter(pane);
     }
-    app.refilter(pane);
 }
 
 /// Repos on top, the selected repo's branches below.

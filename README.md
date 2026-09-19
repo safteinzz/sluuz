@@ -103,8 +103,9 @@ slu status -sb           # real git, passed straight through
 ![slu status -sb and slu log as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status-plain.png)
 
 `git status` you can act on, in git's own two-column code. `s` stages the file
-under the cursor, `u` unstages it and `space` flips it. The diff pane shows the
-side the tab you are on is about. Works from any subdirectory.
+under the cursor, `u` unstages it and `space` flips it; `S` and `U` do the same
+to every file the list shows, filter included. The diff pane shows the side the
+tab you are on is about. Works from any subdirectory.
 
 ## Know what you have not pushed, and delete what is finished
 

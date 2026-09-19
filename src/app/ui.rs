@@ -5,7 +5,7 @@
 use super::{App, Level, Pane, Sel, branches, commits, repos, tags};
 use crate::git::RepoStatus;
 use crate::git::load::{RemoteTags, Tag, TagState};
-use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, char_to_byte};
+use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE};
 use crate::tui::widgets::{
     commit_item, confirm_popup, diff_hscrollbar, diff_scrollbar, file_item, key_footer,
     list_scrollbar, pane_block, scope_tabs, typed_popup,
@@ -368,18 +368,6 @@ fn title(
         spans.extend(scope_tabs(labels, picked));
     }
     spans.push(Span::raw(" "));
-    // A filter is shown on the pane it was typed into, which is the only thing
-    // that says whether `/` or `?` was the key that opened it.
-    let text = &sel.query.text;
-    let key = pane.sigil();
-    let filter = if editing {
-        let at = char_to_byte(text, sel.query.caret);
-        Some(format!("{key}{}▏{}", &text[..at], &text[at..]))
-    } else if !text.is_empty() {
-        Some(format!("{key}{text}"))
-    } else {
-        None
-    };
     let count = if sel.is_empty() {
         let body = if loading { "…" } else { "(none)" };
         body.to_string()
@@ -390,16 +378,7 @@ fn title(
     spans.push(Span::raw(count));
     // The key that would open a filter on this pane sits where the filter will
     // show once typed, rather than in the footer, which cannot say which pane.
-    match filter {
-        Some(f) => spans.push(Span::raw(format!("   {f}"))),
-        None if filterable => spans.push(Span::styled(
-            format!("   {key} filter"),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        )),
-        None => {}
-    }
+    spans.extend(sel.query.title_span(pane.sigil(), editing, filterable));
     spans.push(Span::raw(" "));
     Line::from(spans)
 }

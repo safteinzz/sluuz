@@ -3,7 +3,7 @@
 
 use crate::git::load::{Commit, FileEntry, RefKind, RefLabel, fit_refs};
 use crate::tui::clamp_scroll;
-use crate::tui::input::{X_MOVE, is_back, is_down, is_up};
+use crate::tui::input::{X_MOVE, char_to_byte, is_back, is_down, is_up};
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Margin, Rect};
@@ -157,6 +157,93 @@ impl CommandLine {
                 Typed::Open
             }
             _ => Typed::Open,
+        }
+    }
+}
+
+/// A pane's live filter: what has been typed into it, and where the caret sits
+/// in that text. Empty means the pane shows everything its scope keeps.
+#[derive(Default)]
+pub struct Query {
+    pub text: String,
+    pub caret: usize,
+}
+
+impl Query {
+    /// Does a row survive this filter? Terms are whitespace-separated and every
+    /// one of them has to appear somewhere in the row, so `pablo fix` narrows
+    /// to what both words are in rather than to either.
+    pub fn keeps(&self, row: &str) -> bool {
+        if self.text.trim().is_empty() {
+            return true;
+        }
+        let row = row.to_lowercase();
+        self.text
+            .split_whitespace()
+            .all(|term| row.contains(&term.to_lowercase()))
+    }
+
+    /// Start typing again at the end of whatever a previous Enter kept.
+    pub fn open(&mut self) {
+        self.caret = self.text.chars().count();
+    }
+
+    /// A key typed into the open filter. Returns whether the text changed, so
+    /// the caller re-filters only then.
+    pub fn on_key(&mut self, code: KeyCode) -> bool {
+        let end = self.text.chars().count();
+        match code {
+            KeyCode::Char(c) => {
+                self.text.insert(char_to_byte(&self.text, self.caret), c);
+                self.caret += 1;
+                return true;
+            }
+            KeyCode::Backspace if self.caret > 0 => {
+                self.text.remove(char_to_byte(&self.text, self.caret - 1));
+                self.caret -= 1;
+                return true;
+            }
+            KeyCode::Delete if self.caret < end => {
+                self.text.remove(char_to_byte(&self.text, self.caret));
+                return true;
+            }
+            KeyCode::Left => self.caret = self.caret.saturating_sub(1),
+            KeyCode::Right if self.caret < end => self.caret += 1,
+            KeyCode::Home => self.caret = 0,
+            KeyCode::End => self.caret = end,
+            _ => {}
+        }
+        false
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.caret = 0;
+    }
+
+    /// The filter as its pane's title shows it, led by `key`, the key that
+    /// opened it, so a query can never look like it went to the other pane. A
+    /// `filterable` pane with nothing typed offers that key instead, dimmed.
+    pub fn title_span(&self, key: char, editing: bool, filterable: bool) -> Option<Span<'static>> {
+        let text = &self.text;
+        if editing {
+            let at = char_to_byte(text, self.caret);
+            Some(Span::raw(format!(
+                "   {key}{}▏{}",
+                &text[..at],
+                &text[at..]
+            )))
+        } else if !text.is_empty() {
+            Some(Span::raw(format!("   {key}{text}")))
+        } else if filterable {
+            Some(Span::styled(
+                format!("   {key} filter"),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ))
+        } else {
+            None
         }
     }
 }
@@ -637,5 +724,45 @@ pub fn popup_area(area: Rect, w: u16, h: u16) -> Rect {
         y: area.y + (area.height - h) / 2,
         width: w,
         height: h,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Query;
+
+    fn query(text: &str) -> Query {
+        Query {
+            text: text.to_string(),
+            caret: 0,
+        }
+    }
+
+    #[test]
+    fn a_filter_keeps_only_rows_every_term_is_in() {
+        // `/` and `?` split on whitespace and require all of them, which is what
+        // lets `pablo fix` mean both words rather than either.
+        assert!(
+            query("").keeps("anything at all"),
+            "an empty filter keeps everything"
+        );
+
+        let q = query("pablo fix");
+        assert!(q.keeps("a1b2c3 2026-09-03 pablo fix: the thing"));
+        assert!(!q.keeps("a1b2c3 2026-09-03 pablo feat: the thing"));
+        assert!(!q.keeps("a1b2c3 2026-09-03 marta fix: the thing"));
+    }
+
+    #[test]
+    fn a_filter_ignores_case_on_both_sides() {
+        assert!(query("FIX Pablo").keeps("pablo fix: lowercase row"));
+        assert!(query("fix").keeps("PABLO FIX: UPPERCASE ROW"));
+    }
+
+    #[test]
+    fn a_filter_of_only_spaces_is_no_filter() {
+        // Typing a space and deleting the word must not leave a query that
+        // matches nothing at all.
+        assert!(query("   ").keeps("anything"));
     }
 }

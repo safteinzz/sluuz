@@ -25,6 +25,46 @@ fn max_line_width(raw: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Columns between tab stops once a tab is expanded.
+const TAB_WIDTH: usize = 4;
+
+/// `raw` with tabs expanded and every other control character in caret notation
+/// (`^M`), a trailing CR dropped. ratatui hands them to the terminal as they
+/// are, where a tab or a lone CR moves the cursor and leaves cells behind that
+/// the next frame believes are blank.
+fn printable(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for line in raw.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        // tab stops count from after the diff's own marker column
+        let mut col = 0usize;
+        for (i, c) in line.chars().enumerate() {
+            let before = out.len();
+            match c {
+                '\t' => {
+                    let pad = if i == 0 {
+                        1
+                    } else {
+                        TAB_WIDTH - col % TAB_WIDTH
+                    };
+                    out.extend(std::iter::repeat_n(' ', pad));
+                }
+                c if c.is_ascii_control() => {
+                    out.push('^');
+                    out.push(char::from(c as u8 ^ 0x40));
+                }
+                c if c.is_control() => out.push(char::REPLACEMENT_CHARACTER),
+                c => out.push(c),
+            }
+            if i > 0 {
+                col += out[before..].chars().count();
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 // ── side-by-side diff rendering ─────────────────────────────────────────────
 
 /// The whole text of one side of the file a diff is about, read only when a
@@ -158,6 +198,7 @@ impl RenderedDiff {
 /// with `render_prepared` for free on every scroll.
 pub fn prepare_diff(raw: &str, mut ctx: DiffContext) -> RenderedDiff {
     let ps = syntaxes();
+    let raw = &printable(raw);
 
     let mut rows: Vec<DiffRow> = Vec::new();
     let mut hl: Option<FileHl> = None;
@@ -545,6 +586,28 @@ mod tests {
             blind, whole,
             "without them the closing \"\"\" reads as an opening one - if this \
              passes, the comparison above proves nothing"
+        );
+    }
+
+    #[test]
+    fn a_diff_never_hands_the_terminal_a_control_character() {
+        let raw = "diff --git a/x.txt b/x.txt\n@@ -0,0 +1,3 @@\n+\tindented\n+mid\rline\n+bell\x07end\r\n";
+        let text = render_prepared(&prepare_diff(raw, DiffContext::default()), 120, 0);
+        for line in &text.lines {
+            let row: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                !row.contains(char::is_control),
+                "a control character moves the terminal's cursor and leaves stale cells: {row:?}"
+            );
+        }
+        let rows: Vec<String> = text
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            rows.iter().any(|r| r.contains("     indented")),
+            "a tab at the start of a line expands to the first tab stop: {rows:#?}"
         );
     }
 }

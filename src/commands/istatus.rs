@@ -3,10 +3,10 @@
 //! Top pane: the changed files. Bottom pane: the selected file's diff
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
 //! move between the **all**, **staged** and **unstaged** tabs; `s`/`u`/Space
-//! stage / unstage / toggle the selected file; Ctrl-↑/↓ (or Ctrl-j/k) scroll
-//! the diff. `j`/`k` move the file list. `r` reads the working
-//! tree again, for when a build or another terminal has touched it since this
-//! one opened. `q` / `Esc` / `Ctrl-C` quit.
+//! stage / unstage / toggle the selected file, `S`/`U` every file listed;
+//! Ctrl-↑/↓ (or Ctrl-j/k) scroll the diff. `j`/`k` move the file list and `/` filters it by path. `r` reads
+//! the working tree again, for when a build or another terminal has touched it
+//! since this one opened. `q` / `Esc` / `Ctrl-C` quit.
 //!
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
@@ -21,7 +21,7 @@ use crate::tui::input::{
     stepped,
 };
 use crate::tui::widgets::{
-    Command, CommandLine, Modal, NOTE, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
+    Command, CommandLine, Modal, NOTE, Query, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
     list_scrollbar, pane_block, scope_tabs,
 };
 use crate::tui::{
@@ -105,11 +105,16 @@ struct App {
     enhanced: bool,
     width: u16,
     entries: Vec<Entry>,
-    /// Indices into `entries` that the current scope keeps.
+    /// Indices into `entries` that the current scope and `query` keep.
     visible: Vec<usize>,
     sel: usize,
     scope_idx: usize,
     state: ListState,
+    /// What `/` narrowed the file list to, matched against each path.
+    query: Query,
+    /// The filter is being typed into, so it owns every key until Enter keeps
+    /// it or Esc clears it.
+    editing: bool,
     /// A difftool result, in the footer in place of the keys until `NOTE` is up.
     note: Option<(bool, String)>,
     command: Option<CommandLine>,
@@ -152,6 +157,8 @@ pub fn run(_args: Args) {
         sel: 0,
         scope_idx: 0,
         state: ListState::default(),
+        query: Query::default(),
+        editing: false,
         note: None,
         command: None,
         note_at: Instant::now(),
@@ -213,14 +220,14 @@ impl App {
         }
     }
 
-    /// Re-filter for the current scope, keep the cursor in range, and refresh
-    /// the diff pane under it.
+    /// Re-filter for the current scope and query, keep the cursor in range, and
+    /// refresh the diff pane under it.
     fn rescope(&mut self) {
         self.visible = self
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.in_scope(self.scope()))
+            .filter(|(_, e)| e.in_scope(self.scope()) && self.query.keeps(&e.path))
             .map(|(i, _)| i)
             .collect();
         if self.sel >= self.visible.len() {
@@ -277,6 +284,26 @@ impl App {
             }
             None => false,
         }
+    }
+
+    /// Run a git command against every file the list shows that `wanted` picks,
+    /// reporting whether the working tree changed. A path git has nothing to do
+    /// with fails the whole command, which is why `wanted` narrows it first.
+    fn on_visible(&self, args: &[&str], wanted: fn(&Entry) -> bool) -> bool {
+        let paths: Vec<&str> = self
+            .visible
+            .iter()
+            .map(|&i| &self.entries[i])
+            .filter(|e| wanted(e))
+            .map(|e| e.path.as_str())
+            .collect();
+        if paths.is_empty() {
+            return false;
+        }
+        let mut argv = args.to_vec();
+        argv.push("--");
+        argv.extend(paths);
+        git_run(&self.root, &argv).0
     }
 
     /// Space: stage a file that has unstaged changes, else unstage it.
@@ -393,6 +420,16 @@ impl App {
                         }
                         continue;
                     }
+                    // So does an open filter - `q` types a letter there, it does not quit.
+                    if self.editing {
+                        self.filter_key(code);
+                        continue;
+                    }
+                    if code == KeyCode::Char('/') {
+                        self.query.open();
+                        self.editing = true;
+                        continue;
+                    }
                     if code == KeyCode::Char(':') {
                         self.command = Some(CommandLine::default());
                         continue;
@@ -408,6 +445,27 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// A key typed into the open filter, narrowing the list as it goes. Enter
+    /// keeps what it found and Esc clears it.
+    fn filter_key(&mut self, code: KeyCode) {
+        let changed = match code {
+            KeyCode::Enter => {
+                self.editing = false;
+                false
+            }
+            KeyCode::Esc => {
+                self.editing = false;
+                self.query.clear();
+                true
+            }
+            _ => self.query.on_key(code),
+        };
+        if changed {
+            self.sel = 0;
+            self.rescope();
+        }
     }
 
     fn on_key(&mut self, code: KeyCode, ctrl: bool, terminal: &mut DefaultTerminal) {
@@ -451,6 +509,10 @@ impl App {
             reload = self.on_current(&["add"]);
         } else if code == KeyCode::Char('u') {
             reload = self.on_current(&["restore", "--staged"]);
+        } else if code == KeyCode::Char('S') {
+            reload = self.on_visible(&["add"], Entry::unstaged);
+        } else if code == KeyCode::Char('U') {
+            reload = self.on_visible(&["restore", "--staged"], Entry::staged);
         } else if code == KeyCode::Char(' ') {
             reload = self.toggle();
         } else if code == KeyCode::Char('r') {
@@ -618,14 +680,16 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         .iter()
         .map(|&i| status_item(&app.entries[i]))
         .collect();
-    let tail = if app.visible.is_empty() {
-        " clean ".to_string()
-    } else {
-        format!(" {}/{} ", app.sel + 1, app.visible.len())
+    let count = match (app.visible.is_empty(), app.query.text.is_empty()) {
+        (true, true) => "clean".to_string(),
+        (true, false) => "(none)".to_string(),
+        (false, _) => format!("{}/{}", app.sel + 1, app.visible.len()),
     };
     let labels: Vec<&str> = SCOPES.iter().map(|s| s.label()).collect();
     let mut spans = scope_tabs(&labels, app.scope_idx);
-    spans.push(Span::raw(tail));
+    spans.push(Span::raw(format!(" {count}")));
+    spans.extend(app.query.title_span('/', app.editing, true));
+    spans.push(Span::raw(" "));
     let top_title = Line::from(spans);
     let list = List::new(items)
         .block(pane_block(top_title, true))
@@ -696,8 +760,11 @@ fn help() -> Vec<(String, String)> {
     vec![
         row(Y_MOVE, "move (hold to speed up)"),
         row(X_MOVE, "switch tab"),
+        row("/", "filter the files by path"),
         row("s", "stage the file"),
         row("u", "unstage it"),
+        row("S", "stage every file the list shows"),
+        row("U", "unstage every file the list shows"),
         row("space", "flip it between staged and not"),
         row(CTRL_Y_MOVE, "scroll the diff"),
         row(CTRL_X_MOVE, "pan it sideways"),

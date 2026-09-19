@@ -26,8 +26,8 @@ use crate::git::RepoStatus;
 use crate::git::load::{self, Batch, Commit, FileEntry, RemoteTags, Tag};
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::highlight::RenderedDiff;
-use crate::tui::input::{Accel, char_to_byte, stepped};
-use crate::tui::widgets::{CommandLine, Modal, NOTE};
+use crate::tui::input::{Accel, stepped};
+use crate::tui::widgets::{CommandLine, Modal, NOTE, Query};
 use crate::tui::{pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -77,52 +77,6 @@ impl Level {
             Level::Commits => Some(Level::Branches),
             Level::Diff => Some(Level::Commits),
         }
-    }
-}
-
-/// A pane's live filter: what has been typed into it, and where the caret sits
-/// in that text. Empty means the pane shows everything its scope keeps.
-#[derive(Default)]
-pub struct Query {
-    pub text: String,
-    pub caret: usize,
-}
-
-impl Query {
-    /// Does a row survive this filter? Terms are whitespace-separated and every
-    /// one of them has to appear somewhere in the row, so `pablo fix` narrows
-    /// to what both words are in rather than to either.
-    pub fn keeps(&self, row: &str) -> bool {
-        if self.text.trim().is_empty() {
-            return true;
-        }
-        let row = row.to_lowercase();
-        self.text
-            .split_whitespace()
-            .all(|term| row.contains(&term.to_lowercase()))
-    }
-
-    fn insert(&mut self, c: char) {
-        self.text.insert(char_to_byte(&self.text, self.caret), c);
-        self.caret += 1;
-    }
-
-    fn backspace(&mut self) {
-        if self.caret > 0 {
-            self.text.remove(char_to_byte(&self.text, self.caret - 1));
-            self.caret -= 1;
-        }
-    }
-
-    fn delete(&mut self) {
-        if self.caret < self.text.chars().count() {
-            self.text.remove(char_to_byte(&self.text, self.caret));
-        }
-    }
-
-    fn clear(&mut self) {
-        self.text.clear();
-        self.caret = 0;
     }
 }
 
@@ -718,7 +672,7 @@ impl App {
         let Some(sel) = self.pane_sel(pane) else {
             return;
         };
-        sel.query.caret = sel.query.text.chars().count();
+        sel.query.open();
         self.editing = Some(pane);
     }
 
@@ -836,7 +790,7 @@ pub fn repo_scope(dirty: bool) -> usize {
 mod tests {
     use super::branches::{Branch, Scope as BranchScope};
     use super::repos::Scope as RepoScope;
-    use super::{App, Level, Query, Sel};
+    use super::{App, Level, Sel};
     use crate::git::{RepoStatus, git_capture};
     use std::fs;
     use std::path::PathBuf;
@@ -948,13 +902,6 @@ mod tests {
             ahead,
             behind: 0,
             origin: "github.com:o/r".into(),
-        }
-    }
-
-    fn query(text: &str) -> Query {
-        Query {
-            text: text.to_string(),
-            caret: 0,
         }
     }
 
@@ -1073,34 +1020,6 @@ mod tests {
         sel.append(vec![7, 8]);
         assert_eq!(sel.idx(), Some(7));
         assert_eq!(sel.state.selected(), Some(0));
-    }
-
-    #[test]
-    fn a_filter_keeps_only_rows_every_term_is_in() {
-        // `/` and `?` split on whitespace and require all of them, which is what
-        // lets `pablo fix` mean both words rather than either.
-        assert!(
-            query("").keeps("anything at all"),
-            "an empty filter keeps everything"
-        );
-
-        let q = query("pablo fix");
-        assert!(q.keeps("a1b2c3 2026-09-03 pablo fix: the thing"));
-        assert!(!q.keeps("a1b2c3 2026-09-03 pablo feat: the thing"));
-        assert!(!q.keeps("a1b2c3 2026-09-03 marta fix: the thing"));
-    }
-
-    #[test]
-    fn a_filter_ignores_case_on_both_sides() {
-        assert!(query("FIX Pablo").keeps("pablo fix: lowercase row"));
-        assert!(query("fix").keeps("PABLO FIX: UPPERCASE ROW"));
-    }
-
-    #[test]
-    fn a_filter_of_only_spaces_is_no_filter() {
-        // Typing a space and deleting the word must not leave a query that
-        // matches nothing at all.
-        assert!(query("   ").keeps("anything"));
     }
 
     #[test]
