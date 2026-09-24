@@ -133,7 +133,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         // Commits on top, the selected commit's files below.
         Level::Commits => {
             let labels = stops(&commits::SCOPES, commits::Scope::label);
-            let scope = Some((labels.as_slice(), app.csel.scope));
+            let scope = (!app.stashes).then_some((labels.as_slice(), app.csel.scope));
             let items = commit_items(app, top.width);
             let slow = app.cfeed.slow();
             let top_title = title(
@@ -156,7 +156,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         // The commit list stays up as context; the diff takes the bottom pane.
         Level::Diff => {
             let labels = stops(&commits::SCOPES, commits::Scope::label);
-            let scope = Some((labels.as_slice(), app.csel.scope));
+            let scope = (!app.stashes).then_some((labels.as_slice(), app.csel.scope));
             let items = commit_items(app, top.width);
             let slow = app.cfeed.slow();
             let top_title = title(
@@ -193,6 +193,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             c.target.note().as_deref(),
             &c.target.name(),
             &c.typed,
+            c.target.verb(),
         );
     } else if let Some(c) = &app.confirm {
         confirm_popup(
@@ -237,12 +238,15 @@ fn actions(app: &App) -> Vec<String> {
                 keys.push("t track".to_string());
             }
         }
+        Level::Commits if app.stashes => keys.extend([
+            "a apply".to_string(),
+            "p pop".to_string(),
+            "d drop".to_string(),
+        ]),
         _ => {}
     }
     keys.push("K inspect".to_string());
-    if app.level != Level::Diff {
-        keys.push("r refresh".to_string());
-    }
+    keys.push("r refresh".to_string());
     keys
 }
 
@@ -260,13 +264,16 @@ fn help(app: &App) -> Vec<(String, String)> {
             row(CTRL_X_MOVE, "pan it sideways"),
             row("enter", "open the file in your git difftool"),
             row("K", "everything about the commit"),
+            row("r", "read the commits again and reopen this file"),
             row("esc", "back to the commits"),
             row("q", "quit"),
         ];
     }
-    let mut rows = vec![
-        row(Y_MOVE, "move (hold to speed up)"),
-        row(X_MOVE, "switch tab"),
+    let mut rows = vec![row(Y_MOVE, "move (hold to speed up)")];
+    if !app.stashes {
+        rows.push(row(X_MOVE, "switch tab"));
+    }
+    rows.extend([
         (
             CTRL_Y_MOVE.to_string(),
             format!("move in the {below} below"),
@@ -280,7 +287,7 @@ fn help(app: &App) -> Vec<(String, String)> {
                 "open it"
             },
         ),
-    ];
+    ]);
     match app.level {
         Level::Repos => rows.extend([
             row("s", "sync every repo listed: fetch and prune"),
@@ -296,6 +303,11 @@ fn help(app: &App) -> Vec<(String, String)> {
             row("d", "delete tag (asks first)"),
             row("u", "put back the last delete"),
             row("t", "show push marks instantly"),
+        ]),
+        Level::Commits if app.stashes => rows.extend([
+            row("a", "apply the stash, keeping it"),
+            row("p", "pop it: apply, then drop it"),
+            row("d", "drop it (asks first)"),
         ]),
         _ => {}
     }
@@ -411,7 +423,9 @@ fn tags_label(app: &App) -> (String, Option<String>) {
 /// The commits pane names the paths it was filtered to, or the tag range it
 /// holds.
 fn commits_label(app: &App) -> String {
-    if app.start == Level::Tags {
+    if app.stashes {
+        "stashes".to_string()
+    } else if app.start == Level::Tags {
         app.range_label()
     } else if app.paths.is_empty() {
         "commits".to_string()
@@ -736,6 +750,7 @@ impl App {
             Level::Repos => "repos",
             Level::Branches => "branches",
             Level::Tags => "tags",
+            Level::Commits if self.stashes => "stashes",
             Level::Commits => "commits",
             Level::Diff => "diff",
         };

@@ -4,7 +4,7 @@
 //! for. `slu irepos` starts at Repos, `slu ibranch` at Branches, `slu ilog` at
 //! Commits; Esc walks back up and quits at the level it was entered on. `slu
 //! itag` starts at Tags, which stands where Branches would: a tag's commits
-//! step back to it.
+//! step back to it. `slu istash` starts at Commits, walking the stash.
 //!
 //! Every screen is two panes: the current level's list on top, the level below
 //! it underneath, so the bottom pane always previews where Enter goes. Plain
@@ -17,6 +17,7 @@ mod diff;
 mod inspect;
 mod keys;
 mod repos;
+mod stashes;
 mod tags;
 mod ui;
 
@@ -325,6 +326,8 @@ pub struct App {
     /// Pathspec from `slu ilog <path…>`: filters both the log and each commit's
     /// file list, so a path-filtered log shows only that file's change.
     paths: Vec<String>,
+    /// `slu istash`: the commits are the stash, named `stash@{n}` by position.
+    stashes: bool,
 
     // ── files: the bottom pane of the commits level ─────────────────────────
     files: Vec<FileEntry>,
@@ -340,6 +343,9 @@ pub struct App {
     diff: Text<'static>,
     diff_scroll: u16,
     diff_hscroll: u16,
+    /// `r` on a diff is reading the commits and files again, and opens the same
+    /// file once they are in.
+    reopen: Option<diff::Reopen>,
 }
 
 impl App {
@@ -388,6 +394,7 @@ impl App {
             log_args: Vec::new(),
             limit: COMMITS_PER_BRANCH,
             paths: Vec::new(),
+            stashes: false,
             files: Vec::new(),
             fsel: Sel::default(),
             ffeed: Feed::default(),
@@ -397,6 +404,7 @@ impl App {
             diff: Text::default(),
             diff_scroll: 0,
             diff_hscroll: 0,
+            reopen: None,
         }
     }
 
@@ -459,6 +467,19 @@ impl App {
         // The log itself streams in once the screen is up, so the only thing
         // asked for here is whether there is anything to show at all: `ilog` in
         // an empty repo has to say so on the command line, not open a blank TUI.
+        if !app.has_any_commit() {
+            return None;
+        }
+        app.request_commits();
+        Some(app)
+    }
+
+    /// `slu istash`: the stash as a commit list. Returns None when nothing is
+    /// stashed.
+    pub fn at_stashes(repo: String) -> Option<App> {
+        let mut app = App::new(Level::Commits, repo);
+        app.stashes = true;
+        app.log_args = stashes::stash_log();
         if !app.has_any_commit() {
             return None;
         }
@@ -596,6 +617,9 @@ impl App {
                     }
                     let from = self.commits.len();
                     self.commits.extend(rows);
+                    if self.stashes {
+                        self.name_stashes(from);
+                    }
                     self.extend_commits(from);
                     if done {
                         self.cfeed.loading = false;
@@ -629,7 +653,9 @@ impl App {
         }
         if let Some(prepared) = self.dfeed.take() {
             self.prepared = prepared;
+            self.clamp_pan();
             self.relayout_diff();
+            self.clamp_diff();
         }
         // Streaming can put a commit under the cursor that was not there when
         // the pane was last asked for, so the files pane follows it here - but
@@ -637,6 +663,7 @@ impl App {
         if !self.pending {
             self.sync_files();
         }
+        self.settle_reopen();
     }
 
     /// Run the load a cursor move deferred: every level asks for the pane below.
@@ -740,14 +767,20 @@ impl App {
                 self.request_commits();
                 self.pending = true;
             }
-            // The diff is one file of one commit, so there is nothing to look up
-            // again except that file.
-            Level::Diff => self.open_diff(),
+            // The commit under the diff may be gone, amended or popped, so the
+            // list above it is read again and the diff follows once it is in.
+            Level::Diff => {
+                self.ensure_unpushed();
+                self.reopen = self.reopen_point();
+                self.csel.restore = self.commit_hash().map(str::to_string);
+                self.request_commits();
+            }
         }
     }
 
     /// Esc: step back one level, or quit if this is where we came in.
     fn back(&mut self) -> bool {
+        self.reopen = None;
         match self.level.back(self.start) {
             Some(prev) if self.level > self.start => {
                 self.level = prev;
@@ -794,7 +827,7 @@ mod tests {
     use crate::git::{RepoStatus, git_capture};
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     /// A throwaway repo with a real remote of its own, deleted when it goes out
     /// of scope - including when an assertion panics, so a failing test leaves
@@ -890,6 +923,72 @@ mod tests {
             app.unpushed.contains(&fresh),
             "a refresh has to read the push state again, not trust the cached one"
         );
+    }
+
+    /// Let the background loads land the way the drawing loop does, a frame at
+    /// a time, until `done` says the screen has settled.
+    fn drain_until(app: &mut App, done: impl Fn(&App) -> bool) {
+        let start = Instant::now();
+        while !done(app) {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the background loads never settled"
+            );
+            app.drain();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn refreshing_a_diff_shows_the_commit_as_it_is_now() {
+        // `r` on an open diff read again the hash it was opened on, so a commit
+        // amended since kept showing its old change until the diff was closed,
+        // the log refreshed and the diff opened again.
+        let stage = Stage::new();
+        let file = PathBuf::from(stage.work()).join("a.txt");
+        fs::write(&file, "before\n").expect("write a.txt");
+        stage.git(&["add", "a.txt"]);
+        stage.commit("add a");
+        let app = App::at_commits(stage.work(), Vec::new(), 200, Vec::new());
+        let mut app = app.expect("the repo has commits, so the view opens");
+        drain_until(&mut app, |a| !a.cfeed.loading && !a.ffeed.loading);
+        app.open_diff();
+        drain_until(&mut app, |a| !a.dfeed.loading());
+
+        fs::write(&file, "after\n").expect("rewrite a.txt");
+        stage.git(&["add", "a.txt"]);
+        stage.git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--amend",
+            "-m",
+            "add a",
+        ]);
+        let amended = stage.head();
+
+        app.refresh();
+        drain_until(&mut app, |a| a.reopen.is_none() && !a.dfeed.loading());
+        assert!(
+            app.level == Level::Diff,
+            "the diff is open again, not closed"
+        );
+        assert_eq!(
+            app.commit_hash(),
+            Some(amended.as_str()),
+            "the diff is of the amended commit, not the one it was opened on"
+        );
+        let shows = |word: &str| {
+            app.diff
+                .lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .any(|s| s.content.contains(word))
+        };
+        assert!(shows("after"), "the amended change is on screen");
     }
 
     fn repo(dirty: usize, ahead: usize) -> RepoStatus {

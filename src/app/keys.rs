@@ -267,8 +267,21 @@ fn tags_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
     false
 }
 
-/// Commits on top, the selected commit's files below.
+/// Commits on top, the selected commit's files below. Under `istash` the
+/// commits are stashes, which `a`, `p` and `d` act on, and have no push state
+/// to slide between.
 fn commits_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
+    if app.stashes && !ctrl {
+        match code {
+            KeyCode::Char('a') => app.apply_stash(false),
+            KeyCode::Char('p') => app.apply_stash(true),
+            KeyCode::Char('d') => app.ask_drop_stash(),
+            _ => {}
+        }
+        if matches!(code, KeyCode::Char('a' | 'p' | 'd')) || is_left(code) || is_right(code) {
+            return false;
+        }
+    }
     if ctrl && (is_down(code) || is_up(code)) {
         app.fsel.step(is_down(code), steps);
     } else if is_down(code) || is_up(code) {

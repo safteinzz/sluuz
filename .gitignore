@@ -9,7 +9,7 @@ GEMINI.md
 .windsurfrules
 
 # Scratch git repos for testing the TUIs by hand
-/test-playground
+/playground
 
 # The demo rig's scratch: the staged HOME it builds, which holds the `slu`
 # symlink and the rc file the staged shell reads too. The tapes and stage.sh

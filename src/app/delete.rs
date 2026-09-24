@@ -15,7 +15,7 @@ use ratatui::style::Color;
 
 /// How much of git's own complaint a box shows, so a long one cannot fill the
 /// screen.
-const GIT_WORDS: usize = 8;
+pub(super) const GIT_WORDS: usize = 8;
 
 /// What `u` puts back: the last ref `d` deleted from this clone, exactly as it
 /// was - the object it named and, for a branch, the upstream `git branch -D`
@@ -76,6 +76,13 @@ pub(super) enum Target {
     },
     /// `t`: add the fetch rule that has git keep a copy of this remote's tags.
     Track(String),
+    /// A stash, named `stash@{n}`, whose changes exist nowhere else. `hash` is
+    /// the stash the name meant when the box opened, which is the one that goes.
+    Stash {
+        name: String,
+        subject: String,
+        hash: String,
+    },
 }
 
 impl Target {
@@ -84,7 +91,7 @@ impl Target {
     pub(super) fn typed(&self) -> bool {
         match self {
             Target::Branch { lost, landed, .. } => *lost > 0 && !landed,
-            Target::RemoteTag { .. } | Target::RemoteBranch { .. } => true,
+            Target::RemoteTag { .. } | Target::RemoteBranch { .. } | Target::Stash { .. } => true,
             Target::Tag { .. } | Target::Track(_) => false,
         }
     }
@@ -107,6 +114,7 @@ impl Target {
             Target::RemoteTag { remote, name, .. } => format!("delete {name} on {remote}?"),
             Target::RemoteBranch { remote, branch } => format!("delete {branch} on {remote}?"),
             Target::Track(_) => "show push marks instantly?".to_string(),
+            Target::Stash { name, .. } => format!("drop {name}?"),
         }
     }
 
@@ -115,7 +123,8 @@ impl Target {
         match self {
             Target::Branch { name, .. }
             | Target::Tag { name, .. }
-            | Target::RemoteTag { name, .. } => name.clone(),
+            | Target::RemoteTag { name, .. }
+            | Target::Stash { name, .. } => name.clone(),
             Target::RemoteBranch { branch, .. } => branch.clone(),
             Target::Track(remote) => {
                 format!("git keeps a copy of {remote}'s tags, like it does its branches")
@@ -157,6 +166,17 @@ impl Target {
                 "adds to .git/config: fetch = {}\nundo: git config --unset remote.{remote}.fetch remote-tags",
                 load::tag_rule(remote)
             )),
+            Target::Stash { subject, .. } => Some(format!(
+                "{subject}\nits changes are kept nowhere else, so they go with it"
+            )),
+        }
+    }
+
+    /// What Enter does in the typed gate.
+    pub(super) fn verb(&self) -> &'static str {
+        match self {
+            Target::Stash { .. } => "drop",
+            _ => "delete",
         }
     }
 
@@ -293,6 +313,7 @@ impl App {
                 self.delete_next = Some(target);
             }
             Target::Branch { .. } | Target::Tag { .. } => self.delete_here(target),
+            Target::Stash { name, hash, .. } => self.drop_stash(&name, &hash),
         }
     }
 
@@ -431,7 +452,7 @@ impl App {
                 self.load_tags();
                 self.mark_tags();
             }
-            Target::Track(_) => {}
+            Target::Track(_) | Target::Stash { .. } => {}
         }
         self.pending = true;
     }

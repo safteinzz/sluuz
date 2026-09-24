@@ -45,9 +45,9 @@ slu repos --dirty        # only the ones needing attention
 
 ![slu repos listing six repositories and their state, then only the dirty ones](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos-plain.png)
 
-One app, four doors: `slu ibranch` opens it at the branches level, `slu itag`
-at the tags level and `slu ilog` at the commits level of the repo you are
-standing in.
+One app, five doors: `slu ibranch` opens it at the branches level, `slu itag`
+at the tags level, `slu ilog` at the commits level and `slu istash` at the
+stashes of the repo you are standing in.
 
 ## Find a leaked string in every repo's history
 
@@ -106,6 +106,24 @@ slu status -sb           # real git, passed straight through
 under the cursor, `u` unstages it and `space` flips it; `S` and `U` do the same
 to every file the list shows, filter included. The diff pane shows the side the
 tab you are on is about. Works from any subdirectory.
+
+## See what a stash holds
+
+![slu istash listing two stashes with the files each one holds, opening their diffs, then asking for a stash's name before dropping it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/stash.gif)
+
+```bash
+slu istash               # every stash, its files and their diffs
+slu stash list           # real git, passed straight through
+```
+
+![slu stash list and slu stash show as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/stash-plain.png)
+
+No more `git stash show -p stash@{2}` to find out what you parked. The diff is
+the stash against the commit it was made on, which is what `git stash show -p`
+prints. `a` applies the stash under the cursor, `p` pops it (applies it, then
+drops it) and `d` drops it, which asks for its name first, since its changes
+are kept nowhere else. A pop that conflicts keeps the stash, as git always does.
+Untracked files stashed with `-u` are not listed.
 
 ## Know what you have not pushed, and delete what is finished
 

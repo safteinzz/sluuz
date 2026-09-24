@@ -100,6 +100,17 @@ tag() {
       git -C "$repo" tag -f -a "$name" -m "$msg" "$rev" > /dev/null
 }
 
+# `stash <repo> <seconds-ago> <message>`: stash the working tree as it stands,
+# with a chosen age, so istash lists entries days apart rather than all "now".
+stash() {
+  local repo=$1 age=$2 msg=$3
+  local when="@$((NOW - age)) +0000"
+  env -i $(stage_env) \
+      GIT_AUTHOR_NAME="Ada Weller" GIT_AUTHOR_EMAIL="ada@example.com" GIT_AUTHOR_DATE="$when" \
+      GIT_COMMITTER_NAME="Ada Weller" GIT_COMMITTER_EMAIL="ada@example.com" GIT_COMMITTER_DATE="$when" \
+      git -C "$repo" stash push -q -m "$msg"
+}
+
 # `origin <repo>` - a real bare remote under the stage, pushed to for real, so
 # every ahead/behind count on screen is genuine git tracking state.
 origin() {
@@ -269,6 +280,19 @@ EOF
   sed -i "/^DB_PASSWORD = \"$SECRET\"/c\\DB_PASSWORD = os.environ[\"CHECKOUT_DB_PASSWORD\"]" "$r/config/settings.py"
   c "$r" 1900800 ada "Read the database password from the environment"
   origin "$r"
+
+  # Two stashes for istash, made before the working tree below so neither one
+  # takes it away: an idea parked a week ago, and a two-file fix from yesterday.
+  cat >> "$r/checkout/cart.py" <<'EOF'
+
+    def shipping(self):
+        return Decimal("4.90") if self.subtotal() < 50 else Decimal("0")
+EOF
+  stash "$r" 604800 "flat shipping fee, parked until pricing agrees"
+  sed -i 's/^from checkout.tax import rate_for/from checkout.tax import CENT, rate_for/' "$r/checkout/cart.py"
+  sed -i 's/^        return self.subtotal() \* (1 + rate_for(self.region))/        total = self.subtotal() * (1 + rate_for(self.region))\n        return total.quantize(CENT)/' "$r/checkout/cart.py"
+  sed -i 's/^DEFAULT = Decimal("0.20")/DEFAULT = Decimal("0.20")\nCENT = Decimal("0.01")/' "$r/checkout/tax.py"
+  stash "$r" 86400 "round totals to the cent"
 
   # A working tree with one of each: MM staged and modified again, M staged,
   # ' M' unstaged, ?? untracked. This is the picture the README explains.

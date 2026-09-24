@@ -21,14 +21,15 @@ run() { echo "── $1.tape"; vhs "$1.tape" > /dev/null; }
 if [ $# -gt 0 ]; then
   run "$1"
 else
-  # plain goes first and tags and branches last: those two are the only tapes
-  # that change the world they run in, because they delete a tag and a branch,
-  # and the stills should show it untouched.
+  # plain goes first and stash, tags and branches last: those are the only
+  # tapes that change the world they run in, because they drop a stash and
+  # delete a tag and a branch, and the stills should show it untouched.
   run plain
   run sleuth
   run repos
   run history
   run status
+  run stash
   run tags
   run branches
 fi

@@ -397,6 +397,45 @@ pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u
 
 // ── modal ───────────────────────────────────────────────────────────────────
 
+/// Columns between tab stops once a tab is expanded.
+const TAB_WIDTH: usize = 4;
+
+/// `text` with tabs expanded and every other control character but the line
+/// breaks in caret notation (`^M`). A box shows another program's words, and
+/// ratatui hands a tab to the terminal as it is, which jumps the cursor and
+/// leaves every cell after it one frame out of step.
+fn printable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut col = 0usize;
+    for c in text.chars() {
+        match c {
+            '\n' => {
+                out.push('\n');
+                col = 0;
+            }
+            '\t' => {
+                let pad = TAB_WIDTH - col % TAB_WIDTH;
+                out.extend(std::iter::repeat_n(' ', pad));
+                col += pad;
+            }
+            c if c.is_ascii_control() => {
+                out.push('^');
+                out.push(char::from(c as u8 ^ 0x40));
+                col += 2;
+            }
+            c if c.is_control() => {
+                out.push(char::REPLACEMENT_CHARACTER);
+                col += 1;
+            }
+            c => {
+                out.push(c);
+                col += 1;
+            }
+        }
+    }
+    out
+}
+
 /// A box over the whole screen with something the user has to read: a title, a
 /// body, and no way past it but dismissing it.
 ///
@@ -418,7 +457,7 @@ impl Modal {
     pub fn new(title: impl Into<String>, body: impl Into<String>) -> Modal {
         Modal {
             title: title.into(),
-            body: body.into(),
+            body: printable(&body.into()),
             scroll: 0,
             colour: Color::Yellow,
             keys: "j/k ↑↓ scroll · esc dismiss",
@@ -442,7 +481,7 @@ impl Modal {
             .join("\n");
         Modal {
             title: title.into(),
-            body,
+            body: printable(&body),
             scroll: 0,
             colour: Color::Cyan,
             keys: "j/k ↑↓ scroll · esc close",
@@ -453,7 +492,7 @@ impl Modal {
     /// wraps on its own rather than hanging under the rows' second column.
     pub fn with_text(mut self, text: &str) -> Modal {
         if !text.is_empty() {
-            self.body = format!("{}\n\n{text}", self.body);
+            self.body = format!("{}\n\n{}", self.body, printable(text));
         }
         self
     }
@@ -643,7 +682,15 @@ pub fn confirm_popup(
 
 /// The typed gate: red, no Yes/No, and nothing happens on Enter until `typed`
 /// is exactly `name`, which the box shows so it is copied rather than guessed.
-pub fn typed_popup(frame: &mut Frame, title: &str, note: Option<&str>, name: &str, typed: &str) {
+/// `verb` is what Enter does once the name matches (`delete`, `drop`).
+pub fn typed_popup(
+    frame: &mut Frame,
+    title: &str,
+    note: Option<&str>,
+    name: &str,
+    typed: &str,
+    verb: &str,
+) {
     let full = frame.area();
     let width = box_width(full.width);
     let mut lines: Vec<Line<'static>> = note
@@ -663,8 +710,8 @@ pub fn typed_popup(frame: &mut Frame, title: &str, note: Option<&str>, name: &st
         Span::raw(" to confirm:"),
     ]));
     // Armed or not is shown on the thing Enter does, not only on the text: plain
-    // text and a dim `enter delete` until the name matches, then bold green
-    // text and `enter delete` filled red, the way a picked gate button is.
+    // text and a dim `enter <verb>` until the name matches, then bold green
+    // text and `enter <verb>` filled red, the way a picked gate button is.
     let armed = typed == name;
     let field = if armed {
         Style::default()
@@ -675,9 +722,10 @@ pub fn typed_popup(frame: &mut Frame, title: &str, note: Option<&str>, name: &st
     };
     lines.push(Line::from(Span::styled(format!("{typed}▏"), field)));
     lines.push(Line::from(""));
+    let label = format!(" enter {verb} ");
     let enter = if armed {
         Span::styled(
-            " enter delete ",
+            label,
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Red)
@@ -685,7 +733,7 @@ pub fn typed_popup(frame: &mut Frame, title: &str, note: Option<&str>, name: &st
         )
     } else {
         Span::styled(
-            " enter delete ",
+            label,
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::DIM),
@@ -729,7 +777,30 @@ pub fn popup_area(area: Rect, w: u16, h: u16) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::Query;
+    use super::{Modal, Query};
+
+    #[test]
+    fn a_box_never_hands_a_tab_or_control_character_to_the_terminal() {
+        // A box shows git's own words, which indent file names with a tab. A
+        // tab reaches the terminal as a cursor jump ratatui does not know
+        // about, and every cell after it on the row was drawn out of place.
+        let said = "error: overwritten by merge:\n\tdocs/notes.md\nbell\x07 and\r return";
+        let bodies = [
+            Modal::new("t", said).body,
+            Modal::reader("t", &[("k".to_string(), said.to_string())]).body,
+            Modal::reader("t", &[]).with_text(said).body,
+        ];
+        for body in bodies {
+            assert!(
+                !body.chars().any(|c| c != '\n' && c.is_control()),
+                "a control character reached the box: {body:?}"
+            );
+            assert!(
+                body.contains("docs/notes.md"),
+                "the words around it survive: {body:?}"
+            );
+        }
+    }
 
     fn query(text: &str) -> Query {
         Query {

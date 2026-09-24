@@ -95,3 +95,16 @@ Enter
 Sleep 1.2s
 Screenshot ../readme-assets/status-plain.png
 Sleep 1s
+
+# ---- the stash, as git prints it -------------------------------------------
+Type "clear"
+Enter
+Sleep 400ms
+Type "slu stash list"
+Enter
+Sleep 1.2s
+Type "slu stash show stash@{0}"
+Enter
+Sleep 1.2s
+Screenshot ../readme-assets/stash-plain.png
+Sleep 1s

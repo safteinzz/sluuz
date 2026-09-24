@@ -146,6 +146,10 @@ enum Cmd {
     ///   this repo · ←→/hl tabs · s/u/space stage
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),
+    /// Interactive stash explorer (TUI)
+    ///   every stash, its files and diffs · a applies, p pops, d drops
+    #[command(verbatim_doc_comment)]
+    Istash(commands::istash::Args),
     /// Any other command is passed straight through to git
     #[command(external_subcommand)]
     Git(Vec<String>),
@@ -179,6 +183,7 @@ fn main() {
         Cmd::Itag(args) => commands::itag::run(args),
         Cmd::Iscan(args) => commands::iscan::run(args),
         Cmd::Istatus(args) => commands::istatus::run(args),
+        Cmd::Istash(args) => commands::istash::run(args),
         Cmd::Selfie(cmd) => commands::selfcmd::run(cmd),
         Cmd::Completions(args) => commands::completions::run(args),
         Cmd::Git(args) => passthrough(&args),

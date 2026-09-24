@@ -126,14 +126,17 @@ impl App {
             let refs: Vec<String> = c.refs.iter().map(|r| r.text()).collect();
             rows.push(row("refs", refs.join(", ")));
         }
-        rows.push(row(
-            "remote",
-            if self.unpushed.contains(&c.hash) {
-                "on no remote yet"
-            } else {
-                "pushed"
-            },
-        ));
+        // A stash is never pushed, and saying so on every one says nothing.
+        if !self.stashes {
+            rows.push(row(
+                "remote",
+                if self.unpushed.contains(&c.hash) {
+                    "on no remote yet"
+                } else {
+                    "pushed"
+                },
+            ));
+        }
         rows.push(row("author", d.author.as_str()));
         rows.push(row("date", d.authored.as_str()));
         if d.committer != d.author {
@@ -142,13 +145,25 @@ impl App {
         if d.committed != d.authored {
             rows.push(row("committed", d.committed.as_str()));
         }
+        // A stash's other parents hold its index and untracked files, which
+        // is how git stores one rather than a merge of anything.
+        if self.stashes {
+            let base = d.parents.first().map_or("", String::as_str);
+            rows.push(row("made on", base.chars().take(8).collect::<String>()));
+            return Some((c.short.clone(), rows, d.message));
+        }
         let parents = match d.parents.len() {
             0 => "none, the first commit".to_string(),
             1 => d.parents[0].clone(),
             _ => format!("{} (a merge)", d.parents.join(" ")),
         };
         rows.push(row("parents", parents));
-        Some((format!("commit {}", c.short), rows, d.message))
+        let title = if self.stashes {
+            c.short.clone()
+        } else {
+            format!("commit {}", c.short)
+        };
+        Some((title, rows, d.message))
     }
 }
 

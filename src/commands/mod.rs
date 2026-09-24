@@ -4,6 +4,7 @@ pub mod ibranch;
 pub mod ilog;
 pub mod irepos;
 pub mod iscan;
+pub mod istash;
 pub mod istatus;
 pub mod itag;
 pub mod repos;
