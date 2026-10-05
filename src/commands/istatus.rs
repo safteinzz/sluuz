@@ -68,10 +68,13 @@ impl Scope {
 }
 
 /// One `git status` entry: index status `x`, worktree status `y`, and the path.
+#[derive(Clone)]
 struct Entry {
     x: char,
     y: char,
     path: String,
+    /// Where a rename or copy came from, on whichever side `x` or `y` says.
+    orig: Option<String>,
     /// How many files a collapsed untracked directory holds, when it held too
     /// many to list.
     hidden: usize,
@@ -96,6 +99,95 @@ impl Entry {
             Scope::All => self.staged() || self.unstaged(),
         }
     }
+    /// The flag that makes `git diff` pair a move, and the path it moved from,
+    /// when the index (`cached`) or the working tree holds one.
+    fn moved_from(&self, cached: bool) -> Option<(&'static str, &str)> {
+        let flag = match if cached { self.x } else { self.y } {
+            'R' => "-M",
+            // git only looks at unmodified files as a copy's source when asked
+            'C' => "--find-copies-harder",
+            _ => return None,
+        };
+        self.orig.as_deref().map(|orig| (flag, orig))
+    }
+    /// What `git add` takes to stage this row: a rename in the working tree
+    /// also needs its old path, or the deletion is left behind unstaged.
+    fn to_stage(&self) -> Vec<&str> {
+        self.with_orig(self.y == 'R')
+    }
+    /// What `git restore --staged` takes to unstage this row: a staged rename
+    /// also needs its old path, or the deletion stays staged. A copy does not,
+    /// since its source is a file of its own.
+    fn to_unstage(&self) -> Vec<&str> {
+        self.with_orig(self.x == 'R')
+    }
+    fn with_orig(&self, moved: bool) -> Vec<&str> {
+        match self.orig.as_deref() {
+            Some(orig) if moved => vec![orig, &self.path],
+            _ => vec![&self.path],
+        }
+    }
+    /// The row's name, a move written as `git diff --stat` writes it with
+    /// everything but the new part grayed.
+    fn label(&self) -> Vec<Span<'static>> {
+        match &self.orig {
+            Some(orig) => moved_parts(orig, &self.path)
+                .into_iter()
+                .map(|(text, part)| {
+                    let style = match part {
+                        Part::Shared | Part::New => Style::default(),
+                        Part::Mark | Part::Old => Style::default().fg(Color::DarkGray),
+                    };
+                    Span::styled(text.to_string(), style)
+                })
+                .collect(),
+            None => vec![Span::raw(self.path.clone())],
+        }
+    }
+}
+
+/// What a piece of a move's name is: shared by both paths, the brace and arrow
+/// notation, or the part only the old or only the new path has.
+enum Part {
+    Shared,
+    Mark,
+    Old,
+    New,
+}
+
+/// `from` and `to` as one name with the parts they share written once, the way
+/// git's `--stat` does: `templates/{ => components}/table.html`.
+fn moved_parts<'a>(from: &'a str, to: &'a str) -> Vec<(&'a str, Part)> {
+    let (a, b) = (from.as_bytes(), to.as_bytes());
+    let common = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let pfx = a[..common]
+        .iter()
+        .rposition(|&c| c == b'/')
+        .map_or(0, |i| i + 1);
+    // the suffix may start on the slash that ends the prefix, as git's does
+    let sfx = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take(a.len().min(b.len()) - pfx.saturating_sub(1))
+        .take_while(|(x, y)| x == y)
+        .enumerate()
+        .filter(|(_, (c, _))| **c == b'/')
+        .last()
+        .map_or(0, |(i, _)| i + 1);
+    if pfx == 0 && sfx == 0 {
+        return vec![(from, Part::Old), (" => ", Part::Mark), (to, Part::New)];
+    }
+    let middle = |s: &'a str| &s[pfx..(s.len() - sfx).max(pfx)];
+    vec![
+        (&from[..pfx], Part::Shared),
+        ("{", Part::Mark),
+        (middle(from), Part::Old),
+        (" => ", Part::Mark),
+        (middle(to), Part::New),
+        ("}", Part::Mark),
+        (&from[from.len() - sfx..], Part::Shared),
+    ]
 }
 
 /// Everything the view holds. `root` is on it because every git call needs it,
@@ -227,7 +319,11 @@ impl App {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.in_scope(self.scope()) && self.query.keeps(&e.path))
+            .filter(|(_, e)| {
+                e.in_scope(self.scope())
+                    && (self.query.keeps(&e.path)
+                        || e.orig.as_deref().is_some_and(|o| self.query.keeps(o)))
+            })
             .map(|(i, _)| i)
             .collect();
         if self.sel >= self.visible.len() {
@@ -250,13 +346,7 @@ impl App {
             self.dfeed.idle();
             return;
         };
-        let (root, scope) = (self.root.clone(), self.scope());
-        let entry = Entry {
-            x: entry.x,
-            y: entry.y,
-            path: entry.path.clone(),
-            hidden: entry.hidden,
-        };
+        let (root, scope, entry) = (self.root.clone(), self.scope(), entry.clone());
         self.dfeed.request(move || {
             (
                 diff_for(&root, &entry, scope),
@@ -273,29 +363,36 @@ impl App {
         }
     }
 
-    /// Run a git command against the selected file, reporting whether the
-    /// working tree changed.
-    fn on_current(&self, args: &[&str]) -> bool {
+    /// Run a git command against the paths `paths` gives for the selected
+    /// file, reporting whether the working tree changed.
+    fn on_current(&self, args: &[&str], paths: fn(&Entry) -> Vec<&str>) -> bool {
         match self.current() {
             Some(e) => {
                 let mut argv = args.to_vec();
-                argv.extend_from_slice(&["--", &e.path]);
+                argv.push("--");
+                argv.extend(paths(e));
                 git_run(&self.root, &argv).0
             }
             None => false,
         }
     }
 
-    /// Run a git command against every file the list shows that `wanted` picks,
-    /// reporting whether the working tree changed. A path git has nothing to do
-    /// with fails the whole command, which is why `wanted` narrows it first.
-    fn on_visible(&self, args: &[&str], wanted: fn(&Entry) -> bool) -> bool {
+    /// Run a git command against the paths `paths` gives for every file the
+    /// list shows that `wanted` picks, reporting whether the working tree
+    /// changed. A path git has nothing to do with fails the whole command,
+    /// which is why `wanted` narrows it first.
+    fn on_visible(
+        &self,
+        args: &[&str],
+        wanted: fn(&Entry) -> bool,
+        paths: fn(&Entry) -> Vec<&str>,
+    ) -> bool {
         let paths: Vec<&str> = self
             .visible
             .iter()
             .map(|&i| &self.entries[i])
             .filter(|e| wanted(e))
-            .map(|e| e.path.as_str())
+            .flat_map(paths)
             .collect();
         if paths.is_empty() {
             return false;
@@ -309,8 +406,8 @@ impl App {
     /// Space: stage a file that has unstaged changes, else unstage it.
     fn toggle(&self) -> bool {
         match self.current() {
-            Some(e) if e.unstaged() => self.on_current(&["add"]),
-            Some(_) => self.on_current(&["restore", "--staged"]),
+            Some(e) if e.unstaged() => self.on_current(&["add"], Entry::to_stage),
+            Some(_) => self.on_current(&["restore", "--staged"], Entry::to_unstage),
             None => false,
         }
     }
@@ -318,20 +415,14 @@ impl App {
     /// Open the selected file in the user's difftool, matching the comparison
     /// the pane shows. Returns whether the tree may have changed under it.
     fn difftool(&mut self, terminal: &mut DefaultTerminal) -> bool {
-        let Some(e) = self.current() else {
+        let Some(e) = self.current().cloned() else {
             return false;
         };
-        let scope = self.scope();
-        let cached = scope == Scope::Staged || (scope == Scope::All && !e.unstaged());
-        let (path, untracked) = (e.path.clone(), e.untracked());
-
-        if untracked {
+        if e.untracked() {
             self.set_failed("untracked - nothing to compare");
             return false;
         }
-        let args: &[&str] = if cached { &["--cached", "--"] } else { &["--"] };
-        let mut argv = args.to_vec();
-        argv.push(&path);
+        let argv = diff_args(&e, cached(&e, self.scope()));
         let outcome = run_difftool(terminal, self.enhanced, &self.root, &argv);
         self.width = pane_width(terminal);
         match outcome {
@@ -506,13 +597,13 @@ impl App {
             self.sel = 0;
             moved = true;
         } else if code == KeyCode::Char('s') {
-            reload = self.on_current(&["add"]);
+            reload = self.on_current(&["add"], Entry::to_stage);
         } else if code == KeyCode::Char('u') {
-            reload = self.on_current(&["restore", "--staged"]);
+            reload = self.on_current(&["restore", "--staged"], Entry::to_unstage);
         } else if code == KeyCode::Char('S') {
-            reload = self.on_visible(&["add"], Entry::unstaged);
+            reload = self.on_visible(&["add"], Entry::unstaged, Entry::to_stage);
         } else if code == KeyCode::Char('U') {
-            reload = self.on_visible(&["restore", "--staged"], Entry::staged);
+            reload = self.on_visible(&["restore", "--staged"], Entry::staged, Entry::to_unstage);
         } else if code == KeyCode::Char(' ') {
             reload = self.toggle();
         } else if code == KeyCode::Char('r') {
@@ -540,12 +631,30 @@ fn diff_for(root: &str, entry: &Entry, scope: Scope) -> String {
         let (_, out) = git_run(root, &["diff", "--no-index", "--", nul, &entry.path]);
         return out;
     }
-    let args: &[&str] = if cached(entry, scope) {
-        &["diff", "--cached", "--", &entry.path]
-    } else {
-        &["diff", "--", &entry.path]
-    };
-    git_capture(root, args).unwrap_or_default()
+    let mut args = vec!["diff"];
+    args.extend(diff_args(entry, cached(entry, scope)));
+    git_capture(root, &args).unwrap_or_default()
+}
+
+/// What follows `git diff` or `git difftool` to compare one side of an entry.
+/// A move is given both its paths and the flag that pairs them: with only the
+/// new path in the pathspec, git has nothing to pair it with and shows a file
+/// wholly added.
+fn diff_args(entry: &Entry, cached: bool) -> Vec<&str> {
+    let mut args = Vec::new();
+    if cached {
+        args.push("--cached");
+    }
+    let moved = entry.moved_from(cached);
+    if let Some((flag, _)) = moved {
+        args.push(flag);
+    }
+    args.push("--");
+    if let Some((_, orig)) = moved {
+        args.push(orig);
+    }
+    args.push(&entry.path);
+    args
 }
 
 /// Which pair `diff_for` compares: the index against HEAD, or the working tree
@@ -567,8 +676,8 @@ fn blobs_for(root: &str, entry: &Entry, scope: Scope) -> DiffContext {
         Box::new(move || fs::read_to_string(path).ok())
     };
     // an empty revision names the index copy: `git show :<path>`
-    let rev = |rev: &str| -> Blob {
-        let (root, rev, path) = (root.to_string(), rev.to_string(), entry.path.clone());
+    let rev = |rev: &str, path: &str| -> Blob {
+        let (root, rev, path) = (root.to_string(), rev.to_string(), path.to_string());
         Box::new(move || load_blob(&root, &rev, &path))
     };
     if entry.untracked() {
@@ -577,22 +686,25 @@ fn blobs_for(root: &str, entry: &Entry, scope: Scope) -> DiffContext {
             new: Some(worktree()),
         };
     }
-    if cached(entry, scope) {
+    let cached = cached(entry, scope);
+    let old = entry
+        .moved_from(cached)
+        .map_or(&*entry.path, |(_, orig)| orig);
+    if cached {
         DiffContext {
-            old: Some(rev("HEAD")),
-            new: Some(rev("")),
+            old: Some(rev("HEAD", old)),
+            new: Some(rev("", &entry.path)),
         }
     } else {
         DiffContext {
-            old: Some(rev("")),
+            old: Some(rev("", old)),
             new: Some(worktree()),
         }
     }
 }
 
-/// Parse `git status --porcelain -z` into entries. `-z` NUL-separates records
-/// (so paths with spaces/newlines are safe) and, for renames/copies, follows the
-/// record with an extra NUL-terminated original path, which we skip.
+/// Read `git status --porcelain -z` into entries, untracked directories
+/// expanded.
 fn load_status(root: &str) -> Vec<Entry> {
     // `git_capture_raw`, not `git_capture`: the porcelain's first column is a
     // SPACE when a file has no staged change, and trimming would eat it on the
@@ -601,26 +713,35 @@ fn load_status(root: &str) -> Vec<Entry> {
         Some(r) => r,
         None => return Vec::new(),
     };
+    expand_untracked_dirs(root, parse_status(&raw))
+}
+
+/// Parse `git status --porcelain -z`. `-z` NUL-separates records, so paths with
+/// spaces or newlines are safe, and follows a rename or copy in either column
+/// with one more NUL-terminated record holding the path it came from.
+fn parse_status(raw: &str) -> Vec<Entry> {
     let mut tokens = raw.split('\0').filter(|t| !t.is_empty());
     let mut entries = Vec::new();
     while let Some(tok) = tokens.next() {
         let bytes = tok.as_bytes();
-        if bytes.len() < 3 {
+        if bytes.len() < 4 {
             continue;
         }
-        let x = bytes[0] as char;
-        let y = bytes[1] as char;
-        if x == 'R' || x == 'C' {
-            tokens.next(); // consume the original path of a rename/copy
-        }
+        let (x, y) = (bytes[0] as char, bytes[1] as char);
+        let moved = matches!(x, 'R' | 'C') || matches!(y, 'R' | 'C');
         entries.push(Entry {
             x,
             y,
             path: tok[3..].to_string(),
+            orig: if moved {
+                tokens.next().map(str::to_string)
+            } else {
+                None
+            },
             hidden: 0,
         });
     }
-    expand_untracked_dirs(root, entries)
+    entries
 }
 
 /// How many files an untracked directory may contribute before it stays one
@@ -652,19 +773,10 @@ fn expand_untracked_dirs(root: &str, entries: Vec<Entry>) -> Vec<Entry> {
 
 /// The untracked files under one directory, as their own entries.
 fn untracked_inside(root: &str, dir: &str) -> Vec<Entry> {
-    let raw = match git_capture_raw(root, &["status", "--porcelain", "-z", "-uall", "--", dir]) {
-        Some(r) => r,
-        None => return Vec::new(),
-    };
-    raw.split('\0')
-        .filter(|t| !t.is_empty() && t.len() > 3)
-        .map(|t| Entry {
-            x: t.as_bytes()[0] as char,
-            y: t.as_bytes()[1] as char,
-            path: t[3..].to_string(),
-            hidden: 0,
-        })
-        .collect()
+    match git_capture_raw(root, &["status", "--porcelain", "-z", "-uall", "--", dir]) {
+        Some(raw) => parse_status(&raw),
+        None => Vec::new(),
+    }
 }
 
 fn draw(frame: &mut ratatui::Frame, app: &mut App) {
@@ -699,14 +811,18 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     list_scrollbar(frame, areas[0], app.visible.len(), app.state.offset());
 
     // ── bottom: diff of the selected file ──
-    let (path, tag) = match app.current() {
-        Some(e) => (e.path.as_str(), diff_tag(e, app.scope())),
-        None => ("", ""),
-    };
-    let title = if path.is_empty() {
-        " (nothing to show) ".to_string()
-    } else {
-        format!(" {path} {tag} ")
+    let title = match app.current() {
+        Some(e) => {
+            // a move is named only on the side whose diff shows it
+            let mut spans = vec![Span::raw(" ")];
+            match e.moved_from(cached(e, app.scope())) {
+                Some(_) => spans.extend(e.label()),
+                None => spans.push(Span::raw(e.path.clone())),
+            }
+            spans.push(Span::raw(format!(" {} ", diff_tag(e, app.scope()))));
+            Line::from(spans)
+        }
+        None => Line::from(" (nothing to show) "),
     };
     // An empty diff and one still being prepared look the same, so say which.
     let body = if app.diff.lines.is_empty() && app.dfeed.slow() {
@@ -804,17 +920,41 @@ fn status_item(e: &Entry) -> ListItem<'static> {
         (' ', none)
     };
 
-    ListItem::new(Line::from(vec![
+    let mut spans = vec![
         Span::styled(xc.to_string(), xs),
         Span::styled(yc.to_string(), ys),
         Span::raw("  "),
-        Span::raw(e.path.clone()),
-        Span::styled(
-            match e.hidden {
-                0 => String::new(),
-                n => format!("  {n} files"),
-            },
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]))
+    ];
+    spans.extend(e.label());
+    spans.push(Span::styled(
+        match e.hidden {
+            0 => String::new(),
+            n => format!("  {n} files"),
+        },
+        Style::default().fg(Color::DarkGray),
+    ));
+    ListItem::new(Line::from(spans))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rename_in_either_column_takes_its_source_path_with_it() {
+        let raw = "R  new.txt\0old.txt\0 R moved.txt\0gone.txt\0 M kept.txt\0";
+        let rows: Vec<(String, Option<String>)> = parse_status(raw)
+            .into_iter()
+            .map(|e| (e.path, e.orig))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("new.txt".into(), Some("old.txt".into())),
+                ("moved.txt".into(), Some("gone.txt".into())),
+                ("kept.txt".into(), None),
+            ],
+            "a source path was read as a row of its own"
+        );
+    }
 }

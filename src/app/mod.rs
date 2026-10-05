@@ -555,10 +555,10 @@ impl App {
                         }
                     }
                 }
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if keys::on_key(self, key, terminal) {
-                        break;
-                    }
+                Event::Key(key)
+                    if key.kind == KeyEventKind::Press && keys::on_key(self, key, terminal) =>
+                {
+                    break;
                 }
                 _ => {}
             }
