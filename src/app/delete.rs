@@ -13,9 +13,7 @@ use crate::git::{git_capture, git_run};
 use crate::tui::widgets::Modal;
 use ratatui::style::Color;
 
-/// How much of git's own complaint a box shows, so a long one cannot fill the
-/// screen.
-pub(super) const GIT_WORDS: usize = 8;
+pub(super) use crate::git::GIT_WORDS;
 
 /// What `u` puts back: the last ref `d` deleted from this clone, exactly as it
 /// was - the object it named and, for a branch, the upstream `git branch -D`

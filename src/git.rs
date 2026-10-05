@@ -252,6 +252,10 @@ pub fn first_line(s: &str) -> String {
         .to_string()
 }
 
+/// How much of git's own complaint a box shows, so a long one cannot fill the
+/// screen.
+pub const GIT_WORDS: usize = 8;
+
 /// Run `git -C <repo> <args>` and return (success, combined stdout+stderr).
 /// For commands like fetch/pull where progress goes to stderr and you want to
 /// report what happened regardless of exit status.

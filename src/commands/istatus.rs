@@ -3,7 +3,8 @@
 //! Top pane: the changed files. Bottom pane: the selected file's diff
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
 //! move between the **all**, **staged** and **unstaged** tabs; `s`/`u`/Space
-//! stage / unstage / toggle the selected file, `S`/`U` every file listed;
+//! stage / unstage / toggle the selected file, `S`/`U` every file listed, `d`
+//! puts it back as HEAD has it behind a typed gate;
 //! Ctrl-↑/↓ (or Ctrl-j/k) scroll the diff. `j`/`k` move the file list and `/` filters it by path. `r` reads
 //! the working tree again, for when a build or another terminal has touched it
 //! since this one opened. `q` / `Esc` / `Ctrl-C` quit.
@@ -11,7 +12,7 @@
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
 use crate::git::load::load_blob;
-use crate::git::{git_capture, git_capture_raw, git_run};
+use crate::git::{GIT_WORDS, git_capture, git_capture_raw, git_run};
 use crate::tui::FRAME;
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::difftool::{DiffTool, run_difftool};
@@ -22,7 +23,7 @@ use crate::tui::input::{
 };
 use crate::tui::widgets::{
     Command, CommandLine, Modal, NOTE, Query, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
-    list_scrollbar, pane_block, scope_tabs,
+    list_scrollbar, pane_block, scope_tabs, typed_popup,
 };
 use crate::tui::{
     clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
@@ -127,6 +128,12 @@ impl Entry {
             _ => vec![&self.path],
         }
     }
+    /// The file or directory name alone, which is what the gate in front of
+    /// `d` wants typed: a whole path is too long to ask for.
+    fn base_name(&self) -> &str {
+        let path = self.path.trim_end_matches('/');
+        path.rsplit('/').next().unwrap_or(path)
+    }
     /// The row's name, a move written as `git diff --stat` writes it with
     /// everything but the new part grayed.
     fn label(&self) -> Vec<Span<'static>> {
@@ -216,6 +223,8 @@ struct App {
     /// A message that has to be read before anything else happens: it owns
     /// every key until it is dismissed.
     modal: Option<Modal>,
+    /// The typed gate `d` opens, owning every key until it is answered.
+    discard: Option<Discard>,
     accel: Accel,
     prepared: RenderedDiff,
     diff: Text<'static>,
@@ -256,6 +265,7 @@ pub fn run(_args: Args) {
         note_at: Instant::now(),
         diff_rows: 1,
         modal: None,
+        discard: None,
         accel: Accel::default(),
         prepared: RenderedDiff::default(),
         diff: Text::default(),
@@ -433,6 +443,31 @@ impl App {
         true // a difftool edit may have changed the file
     }
 
+    /// `d` let through: put the entry back as HEAD has it, or delete it when
+    /// git has no copy, then read the tree again.
+    fn discard(&mut self, entry: Entry) {
+        let (ok, out) = discard(&self.root, &entry);
+        if ok {
+            self.set_status(match entry.untracked() {
+                true => format!("deleted {}", entry.base_name()),
+                false => format!("deleted the changes to {}", entry.base_name()),
+            });
+        } else {
+            let words: Vec<&str> = out.lines().take(GIT_WORDS).collect();
+            self.modal = Some(Modal::new(
+                format!("could not delete `{}`", entry.base_name()),
+                words.join("\n"),
+            ));
+        }
+        self.reload();
+    }
+
+    /// Something worked: green in the footer.
+    fn set_status(&mut self, text: impl Into<String>) {
+        self.note = Some((true, text.into()));
+        self.note_at = Instant::now();
+    }
+
     /// Something did not work, with nothing more to read than one line.
     fn set_failed(&mut self, text: impl Into<String>) {
         self.note = Some((false, text.into()));
@@ -486,6 +521,22 @@ impl App {
                     if let Some(modal) = &mut self.modal {
                         if modal.on_key(code) {
                             self.modal = None;
+                        }
+                        continue;
+                    }
+                    if let Some(gate) = &mut self.discard {
+                        match code {
+                            KeyCode::Enter if gate.typed == gate.entry.base_name() => {
+                                if let Some(gate) = self.discard.take() {
+                                    self.discard(gate.entry);
+                                }
+                            }
+                            KeyCode::Esc => self.discard = None,
+                            KeyCode::Backspace => {
+                                gate.typed.pop();
+                            }
+                            KeyCode::Char(c) => gate.typed.push(c),
+                            _ => {}
                         }
                         continue;
                     }
@@ -606,6 +657,11 @@ impl App {
             reload = self.on_visible(&["restore", "--staged"], Entry::staged, Entry::to_unstage);
         } else if code == KeyCode::Char(' ') {
             reload = self.toggle();
+        } else if code == KeyCode::Char('d') {
+            self.discard = self.current().map(|e| Discard {
+                entry: e.clone(),
+                typed: String::new(),
+            });
         } else if code == KeyCode::Char('r') {
             reload = true;
         } else if code == KeyCode::Enter {
@@ -618,6 +674,52 @@ impl App {
             self.rescope();
         }
     }
+}
+
+/// What `d` is asking about: the entry as it was when the gate opened, so a
+/// reload under it cannot change which file goes.
+struct Discard {
+    entry: Entry,
+    typed: String,
+}
+
+impl Discard {
+    fn title(&self) -> &'static str {
+        match (self.entry.untracked(), self.entry.path.ends_with('/')) {
+            (true, true) => "delete this directory?",
+            (true, false) => "delete this file?",
+            (false, _) => "delete its changes?",
+        }
+    }
+
+    /// The whole name, then what is about to go.
+    fn note(&self) -> String {
+        let e = &self.entry;
+        let name: String = e.label().iter().map(|s| s.content.as_ref()).collect();
+        let lost = if e.untracked() {
+            "untracked, so git has no copy: it goes from the disk".to_string()
+        } else if let Some(orig) = e.orig.as_deref().filter(|_| e.x == 'R' || e.y == 'R') {
+            format!("every change goes and it moves back to {orig}")
+        } else if matches!(e.x, 'A' | 'C') || matches!(e.y, 'A' | 'C') {
+            "added since the last commit, so the file itself goes".to_string()
+        } else {
+            "every change since the last commit goes, staged or not".to_string()
+        };
+        format!("{name}\n{lost}")
+    }
+}
+
+/// Put an entry back as HEAD has it, reporting success and git's words.
+/// `git restore` removes a path HEAD has no copy of, which is what takes back
+/// an added file. A rename takes its old path back with it; a copy leaves its
+/// source alone, since that is a file of its own.
+fn discard(root: &str, entry: &Entry) -> (bool, String) {
+    if entry.untracked() {
+        return git_run(root, &["clean", "-fdq", "--", &entry.path]);
+    }
+    let mut args = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
+    args.extend(entry.with_orig(entry.x == 'R' || entry.y == 'R'));
+    git_run(root, &args)
 }
 
 /// The raw diff for one entry. Staged scope shows the index-vs-HEAD diff;
@@ -852,6 +954,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         "u unstage".to_string(),
         "space flip".to_string(),
         "enter difftool".to_string(),
+        "d del".to_string(),
         "r refresh".to_string(),
     ];
     frame.render_widget(
@@ -865,6 +968,16 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         footer_row,
     );
 
+    if let Some(gate) = &app.discard {
+        typed_popup(
+            frame,
+            gate.title(),
+            Some(&gate.note()),
+            gate.entry.base_name(),
+            &gate.typed,
+            "delete",
+        );
+    }
     if let Some(modal) = &mut app.modal {
         modal.draw(frame);
     }
@@ -885,6 +998,7 @@ fn help() -> Vec<(String, String)> {
         row(CTRL_Y_MOVE, "scroll the diff"),
         row(CTRL_X_MOVE, "pan it sideways"),
         row("enter", "open the file in your git difftool"),
+        row("d", "delete its changes, or the file when git has no copy"),
         row("r", "read it again from git"),
         row("q", "quit"),
     ]
@@ -939,6 +1053,120 @@ fn status_item(e: &Entry) -> ListItem<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A throwaway repo under the system temp dir, deleted when it goes out of
+    /// scope, including when an assertion panics, so a failing test leaves the
+    /// machine as it found it.
+    struct TempRepo(PathBuf);
+
+    impl TempRepo {
+        fn new(tag: &str) -> TempRepo {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!("sluuz-{tag}-{stamp}"));
+            fs::create_dir_all(&dir).expect("temp dir");
+            let repo = TempRepo(dir);
+            repo.git(&["init", "-q"]);
+            // set here so the machine's own git config cannot hide the rename
+            repo.git(&["config", "status.renames", "true"]);
+            repo
+        }
+
+        fn path(&self) -> &str {
+            self.0.to_str().expect("utf-8 temp path")
+        }
+
+        fn git(&self, args: &[&str]) {
+            git_capture(self.path(), args).unwrap_or_else(|| panic!("git {args:?}"));
+        }
+
+        fn write(&self, file: &str, text: &str) {
+            let path = self.0.join(file);
+            fs::create_dir_all(path.parent().expect("a parent")).expect("fixture dir");
+            fs::write(path, text).expect("write fixture");
+        }
+
+        fn read(&self, file: &str) -> Option<String> {
+            fs::read_to_string(self.0.join(file)).ok()
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn deleting_every_row_leaves_the_tree_as_head_has_it() {
+        let repo = TempRepo::new("discard");
+        let lines = "one\ntwo\nthree\nfour\nfive\n";
+        repo.write("edited.txt", lines);
+        repo.write("moved.txt", lines);
+        repo.git(&["add", "."]);
+        repo.git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "base",
+        ]);
+
+        // MM: a staged edit and an unstaged one on top
+        repo.write("edited.txt", "staged\n");
+        repo.git(&["add", "edited.txt"]);
+        repo.write("edited.txt", "unstaged\n");
+        // A: a file the last commit never had
+        repo.write("added.txt", "new\n");
+        repo.git(&["add", "added.txt"]);
+        // RM: a staged rename edited after the move
+        fs::create_dir_all(repo.0.join("sub")).expect("fixture dir");
+        repo.git(&["mv", "moved.txt", "sub/moved.txt"]);
+        repo.write("sub/moved.txt", &format!("{lines}six\n"));
+        // ??: an untracked folder holding a file git ignores
+        repo.write("junk/a.txt", "junk\n");
+        repo.write("junk/keep.log", "keep\n");
+        repo.write(".git/info/exclude", "*.log\n");
+
+        let rows = load_status(repo.path());
+        let codes: Vec<String> = rows.iter().map(|e| format!("{}{}", e.x, e.y)).collect();
+        for code in ["MM", "A ", "RM", "??"] {
+            assert!(
+                codes.iter().any(|c| c == code),
+                "the fixture has no `{code}` row to delete: {codes:?}"
+            );
+        }
+        for row in &rows {
+            let (ok, out) = discard(repo.path(), row);
+            assert!(ok, "deleting `{}` failed: {out}", row.path);
+        }
+
+        let left: Vec<String> = load_status(repo.path())
+            .iter()
+            .map(|e| format!("{}{} {}", e.x, e.y, e.path))
+            .collect();
+        assert!(left.is_empty(), "rows survived their delete: {left:?}");
+        assert_eq!(repo.read("edited.txt").as_deref(), Some(lines));
+        assert_eq!(
+            repo.read("moved.txt").as_deref(),
+            Some(lines),
+            "the rename went back to its old path as committed"
+        );
+        assert_eq!(
+            repo.read("junk/keep.log").as_deref(),
+            Some("keep\n"),
+            "an ignored file inside the untracked folder was deleted"
+        );
+    }
 
     #[test]
     fn a_rename_in_either_column_takes_its_source_path_with_it() {

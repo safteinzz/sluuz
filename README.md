@@ -104,8 +104,10 @@ slu status -sb           # real git, passed straight through
 
 `git status` you can act on, in git's own two-column code. `s` stages the file
 under the cursor, `u` unstages it and `space` flips it; `S` and `U` do the same
-to every file the list shows, filter included. The diff pane shows the side the
-tab you are on is about. Works from any subdirectory.
+to every file the list shows, filter included. `d` throws away every change to
+the file, or the file itself when git has no copy of it, once you type its
+name. The diff pane shows the side the tab you are on is about. Works from any
+subdirectory.
 
 ## See what a stash holds
 
