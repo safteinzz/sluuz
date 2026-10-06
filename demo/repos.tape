@@ -32,7 +32,7 @@ Sleep 300ms
 Type "slu irepos"
 Enter
 Sleep 1.5s
-# `/` narrows the list the plain keys drive and `?` the pane below it, at every
+# `/` narrows the list the plain keys drive and `ctrl-f` the pane below it, at every
 # level: the repos, then that repo's branches, then the commits under those. The
 # filter is how you get where you are going, so it replaces the arrow keys here.
 Type "/"
@@ -50,7 +50,7 @@ Type "feat"
 Sleep 1.2s
 Enter
 Sleep 400ms
-Type "?"
+Ctrl+F
 Sleep 300ms
 Type "Marek"
 Sleep 1.4s

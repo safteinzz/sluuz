@@ -9,7 +9,8 @@
 //! The bar starts empty and ready to type, showing the usual secret terms as a
 //! placeholder: submitting an empty bar runs those, so the classic audit is one
 //! keypress without any of it being in your way. Multiple terms are
-//! comma-separated, and `h`/`l` then filters the results down to one.
+//! comma-separated, and `h`/`l` then filters the results down to one. `/` goes
+//! back to the bar, `?` lists every key.
 //!
 //! Scanning is slow (pickaxe over every commit of every branch of every repo),
 //! so it happens on submit, with the screen showing that it is working.
@@ -20,18 +21,18 @@ use crate::history::{self, CommitMatch};
 use crate::tui::difftool::{DiffTool, difftool_commit};
 use crate::tui::highlight::{RenderedDiff, prepare_diff, render_prepared};
 use crate::tui::input::{
-    Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, char_to_byte, is_back, is_down, is_left,
+    Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_back, is_ctrl_c, is_down, is_help, is_left,
     is_open, is_right, is_up, norm_esc, stepped,
 };
 use crate::tui::widgets::{
-    Command, CommandLine, Modal, NOTE, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
-    list_scrollbar, pane_block, scope_tabs,
+    BACK, CANCEL, Command, CommandLine, FIND, HELP, HelpSection, Modal, NOTE, QUIT, Query, Typed,
+    diff_hscrollbar, diff_scrollbar, key_footer, list_scrollbar, pane_block, scope_tabs,
 };
 use crate::tui::{
     clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
 };
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -103,8 +104,7 @@ struct App {
     enhanced: bool,
     width: u16,
     mode: Mode,
-    query: String,
-    cursor: usize,
+    query: Query,
     terms: Vec<String>,
     hits: Vec<Hit>,
     /// Indices into `hits` that the current term scope keeps.
@@ -144,8 +144,7 @@ pub fn run(args: Args) {
         enhanced: false,
         width: 120,
         mode: Mode::Editing,
-        query: String::new(),
-        cursor: 0,
+        query: Query::default(),
         terms: Vec::new(),
         hits: Vec::new(),
         visible: Vec::new(),
@@ -213,15 +212,21 @@ impl App {
                 continue;
             }
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            let code = norm_esc(key.code, ctrl);
+            let mut code = norm_esc(key.code, ctrl);
 
-            // Ctrl-C quits from anywhere, even out from under a modal.
-            if ctrl && code == KeyCode::Char('c') {
-                break;
+            // Ctrl-C is Esc under a box, in the `:` line or in the bar, and
+            // quits from the hits.
+            if is_ctrl_c(code, ctrl) {
+                let open =
+                    self.modal.is_some() || self.command.is_some() || self.mode == Mode::Editing;
+                if !open {
+                    break;
+                }
+                code = KeyCode::Esc;
             }
             // A modal owns every key until it is dismissed.
             if let Some(modal) = &mut self.modal {
-                if modal.on_key(code) {
+                if modal.on_key(code, ctrl) {
                     self.modal = None;
                 }
                 continue;
@@ -236,14 +241,12 @@ impl App {
                     Typed::Run(run) => {
                         self.command = None;
                         match run {
-                            Command::Help => {
-                                self.modal = Some(Modal::reader("keys · scan", &help()))
-                            }
+                            Command::Help => self.help(),
                             Command::Quit => break,
                             Command::Unknown(what) => {
                                 self.note = Some((
                                     false,
-                                    format!("unknown command `{what}` · :help lists the keys"),
+                                    format!("unknown command `{what}` · ? lists every key"),
                                 ));
                                 self.note_at = Instant::now();
                             }
@@ -258,7 +261,7 @@ impl App {
             }
 
             let quit = if self.mode == Mode::Editing {
-                self.edit_key(code, ctrl)
+                self.edit_key(code, key)
             } else {
                 self.browse_key(code, ctrl, terminal)
             };
@@ -283,10 +286,10 @@ impl App {
     /// found. An empty bar means the usual secret terms, matching the
     /// placeholder.
     fn scan(&mut self) {
-        self.terms = parse_terms(if self.query.trim().is_empty() {
+        self.terms = parse_terms(if self.query.text.trim().is_empty() {
             DEFAULT_TERMS
         } else {
-            &self.query
+            &self.query.text
         });
         self.hits = collect(&self.base, self.depth, &self.terms);
         self.scope_idx = 0;
@@ -334,30 +337,23 @@ impl App {
         }
     }
 
-    /// The query bar has focus: a plain text field until Enter runs it.
-    fn edit_key(&mut self, code: KeyCode, ctrl: bool) -> bool {
+    /// `?`: every key, in a reader over the panes.
+    fn help(&mut self) {
+        self.modal = Some(Modal::help(HELP_ROWS));
+    }
+
+    /// The query bar has focus: a text field until Enter runs it. Every letter
+    /// but `?` is typed, which opens help as it does everywhere.
+    fn edit_key(&mut self, code: KeyCode, key: KeyEvent) -> bool {
         match code {
             KeyCode::Enter => self.pending = true,
-            KeyCode::Char(c) if !ctrl => {
-                self.query.insert(char_to_byte(&self.query, self.cursor), c);
-                self.cursor += 1;
-            }
-            KeyCode::Backspace if self.cursor > 0 => {
-                self.query
-                    .remove(char_to_byte(&self.query, self.cursor - 1));
-                self.cursor -= 1;
-            }
-            KeyCode::Delete if self.cursor < self.query.chars().count() => {
-                self.query.remove(char_to_byte(&self.query, self.cursor));
-            }
-            KeyCode::Left if self.cursor > 0 => self.cursor -= 1,
-            KeyCode::Right if self.cursor < self.query.chars().count() => self.cursor += 1,
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.query.chars().count(),
+            KeyCode::Char('?') => self.help(),
             // Esc leaves the bar only when there are results to go back to.
             KeyCode::Esc if self.searched => self.mode = Mode::Browsing,
             KeyCode::Esc => return true,
-            _ => {}
+            _ => {
+                self.query.on_key(key);
+            }
         }
         false
     }
@@ -369,7 +365,10 @@ impl App {
 
         if matches!(code, KeyCode::Char('q')) || is_back(code) {
             return true;
-        } else if matches!(code, KeyCode::Char('/') | KeyCode::Char('i')) {
+        } else if is_help(code) {
+            self.help();
+        } else if !ctrl && code == KeyCode::Char('/') {
+            self.query.open();
             self.mode = Mode::Editing;
         } else if ctrl && is_down(code) {
             let by = SCROLL_STEP.saturating_mul(steps as u16);
@@ -426,21 +425,48 @@ impl App {
     }
 }
 
-/// Byte offset of character index `idx`, so inserts and deletes stay safe on
-/// multi-byte input.
-/// Every key the results answer to, for the box `:help` opens.
-fn help() -> Vec<(String, String)> {
-    let row = |k: &str, d: &str| (k.to_string(), d.to_string());
-    vec![
-        row(Y_MOVE, "move through the hits (hold to speed up)"),
-        row(X_MOVE, "switch tab: all hits, or one term's"),
-        row(CTRL_Y_MOVE, "scroll the diff"),
-        row(CTRL_X_MOVE, "pan it sideways"),
-        row("/", "edit the terms"),
-        row("enter", "open the file in your git difftool"),
-        row("q", "quit"),
-    ]
-}
+/// Every key the view answers to, for the reader `?` opens. The panel scrolls,
+/// so a new row costs nothing but its line.
+const HELP_ROWS: &[HelpSection] = &[
+    (
+        "the bar",
+        &[
+            ("type", "terms, comma separated"),
+            ("↵", "run them"),
+            ("", "a blank bar runs the usual secret terms"),
+            ("esc", "back to the hits, or quit before the first run"),
+            ("?", "help, even while typing"),
+        ],
+    ),
+    (
+        "the hits",
+        &[
+            (Y_MOVE, "move a hit"),
+            (X_MOVE, "tab: all, or one term's"),
+            ("", "a held key speeds up"),
+            ("↵", "git difftool"),
+            ("/", "find again"),
+            (":", "a command (:q quits)"),
+            ("?", "this help"),
+            ("q esc", "quit"),
+        ],
+    ),
+    ("the diff", &[(CTRL_Y_MOVE, "scroll"), (CTRL_X_MOVE, "pan")]),
+    (
+        "every screen",
+        &[("ctrl-c", "quit, or esc in a box or the bar")],
+    ),
+    ("in a box", &[(Y_MOVE, "scroll"), ("esc", "close")]),
+    (
+        "in this help",
+        &[
+            (Y_MOVE, "scroll"),
+            ("ctrl-d ctrl-u", "half a page down, up"),
+            ("g G", "the top, the bottom"),
+            ("esc q ?", "close"),
+        ],
+    ),
+];
 
 /// Split the bar's text into terms: comma-separated, trimmed, empties dropped.
 fn parse_terms(query: &str) -> Vec<String> {
@@ -513,6 +539,9 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         Constraint::Length(1),
     ])
     .split(frame.area());
+    // Everything above the footer, which a box is drawn inside.
+    let [panes, _] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
     app.diff_rows = areas[2].height.saturating_sub(2).max(1);
 
     // ── query bar ──
@@ -522,10 +551,10 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     } else if editing {
         " scan terms (comma separated) "
     } else {
-        " scan terms (comma separated)   / edit "
+        " scan terms (comma separated)   / find "
     };
     // Empty bar shows the defaults dimmed; submitting empty runs exactly those.
-    let bar_line = if app.query.is_empty() {
+    let bar_line = if app.query.text.is_empty() {
         Line::from(Span::styled(
             format!(" {DEFAULT_TERMS}"),
             Style::default()
@@ -534,7 +563,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         ))
     } else {
         Line::from(Span::styled(
-            format!(" {}", app.query),
+            format!(" {}", app.query.text),
             Style::default().fg(Color::White),
         ))
     };
@@ -543,7 +572,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     if editing && !app.pending {
         // A real terminal cursor, so it blinks where the user is typing.
         frame.set_cursor_position(Position::new(
-            areas[0].x + 2 + app.cursor as u16,
+            areas[0].x + 2 + app.query.caret as u16,
             areas[0].y + 1,
         ));
     }
@@ -562,7 +591,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let title = if app.pending {
         Line::from(" searching every branch of every repo… ")
     } else if !app.searched {
-        Line::from(" type terms above, or press enter for the defaults ")
+        Line::from(" type terms above, or ↵ for the defaults ")
     } else {
         let tail = if app.visible.is_empty() {
             " no hits ".to_string()
@@ -610,27 +639,29 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         app.diff_hscroll,
     );
 
-    // While the bar has the keys, `:` is a character like any other, so the
-    // footer does not offer `:help` there.
-    let actions: Vec<String> = if editing {
-        let out = if app.searched { "esc back" } else { "esc quit" };
-        vec!["enter run".to_string(), out.to_string()]
+    // While the bar has the keys every letter but `?` is typed, so its footer
+    // offers only keys that are not letters.
+    let (keys, help) = if editing {
+        // Before the first run the bar is all there is, so cancelling it ends
+        // the scan, the way `esc` cancels a one-field form.
+        let out = if app.searched { BACK } else { CANCEL };
+        (vec!["↵ run", out], HELP)
     } else {
-        vec!["enter difftool".to_string(), "q quit".to_string()]
+        (vec!["↵ difftool", FIND, QUIT], HELP)
     };
     frame.render_widget(
         key_footer(
-            &actions,
+            &keys,
             app.note.as_ref(),
             app.command.as_ref(),
-            !editing,
+            Some(help),
             areas[3].width,
         ),
         areas[3],
     );
 
     if let Some(modal) = &mut app.modal {
-        modal.draw(frame);
+        modal.draw(frame, panes);
     }
 }
 

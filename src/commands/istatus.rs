@@ -7,7 +7,7 @@
 //! puts it back as HEAD has it behind a typed gate;
 //! Ctrl-↑/↓ (or Ctrl-j/k) scroll the diff. `j`/`k` move the file list and `/` filters it by path. `r` reads
 //! the working tree again, for when a build or another terminal has touched it
-//! since this one opened. `q` / `Esc` / `Ctrl-C` quit.
+//! since this one opened. `?` lists every key. `q` / `Esc` / `Ctrl-C` quit.
 //!
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
@@ -18,18 +18,19 @@ use crate::tui::difffeed::DiffFeed;
 use crate::tui::difftool::{DiffTool, run_difftool};
 use crate::tui::highlight::{Blob, DiffContext, RenderedDiff, render_prepared};
 use crate::tui::input::{
-    Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_down, is_left, is_right, is_up, norm_esc,
-    stepped,
+    Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_ctrl_c, is_down, is_help, is_left,
+    is_right, is_up, norm_esc, stepped,
 };
 use crate::tui::widgets::{
-    Command, CommandLine, Modal, NOTE, Query, Typed, diff_hscrollbar, diff_scrollbar, key_footer,
-    list_scrollbar, pane_block, scope_tabs, typed_popup,
+    Command, CommandLine, DEL, FILTER_KEYS, FIND, HELP, HelpSection, Modal, NOTE, QUIT, Query,
+    REFRESH, Typed, diff_hscrollbar, diff_scrollbar, key_footer, list_scrollbar, pane_block,
+    scope_tabs, typed_popup,
 };
 use crate::tui::{
     clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
 };
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -511,32 +512,38 @@ impl App {
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                    let code = norm_esc(key.code, ctrl);
+                    let mut code = norm_esc(key.code, ctrl);
 
-                    // Ctrl-C quits from anywhere, even out from under a modal.
-                    if ctrl && code == KeyCode::Char('c') {
-                        break;
+                    // Ctrl-C is Esc under a box, in the `:` line or in the
+                    // filter, and quits from the view itself.
+                    if is_ctrl_c(code, ctrl) {
+                        let open = self.modal.is_some()
+                            || self.discard.is_some()
+                            || self.command.is_some()
+                            || self.editing;
+                        if !open {
+                            break;
+                        }
+                        code = KeyCode::Esc;
                     }
                     // A modal owns every key until it is dismissed.
                     if let Some(modal) = &mut self.modal {
-                        if modal.on_key(code) {
+                        if modal.on_key(code, ctrl) {
                             self.modal = None;
                         }
                         continue;
                     }
                     if let Some(gate) = &mut self.discard {
                         match code {
-                            KeyCode::Enter if gate.typed == gate.entry.base_name() => {
+                            KeyCode::Enter if gate.typed.text == gate.entry.base_name() => {
                                 if let Some(gate) = self.discard.take() {
                                     self.discard(gate.entry);
                                 }
                             }
                             KeyCode::Esc => self.discard = None,
-                            KeyCode::Backspace => {
-                                gate.typed.pop();
+                            _ => {
+                                gate.typed.on_key(key);
                             }
-                            KeyCode::Char(c) => gate.typed.push(c),
-                            _ => {}
                         }
                         continue;
                     }
@@ -550,25 +557,35 @@ impl App {
                             Typed::Run(run) => {
                                 self.command = None;
                                 match run {
-                                    Command::Help => {
-                                        self.modal = Some(Modal::reader("keys · status", &help()))
-                                    }
+                                    Command::Help => self.help(),
                                     Command::Quit => break,
                                     Command::Unknown(what) => self.set_failed(format!(
-                                        "unknown command `{what}` · :help lists the keys"
+                                        "unknown command `{what}` · ? lists every key"
                                     )),
                                 }
                             }
                         }
                         continue;
                     }
-                    // So does an open filter - `q` types a letter there, it does not quit.
+                    // So does an open filter: `q` types there, but `?` still
+                    // opens help.
                     if self.editing {
-                        self.filter_key(code);
+                        if is_help(code) {
+                            self.help();
+                        } else {
+                            self.filter_key(code, key);
+                        }
                         continue;
                     }
-                    if code == KeyCode::Char('/') {
-                        self.query.open();
+                    if is_help(code) {
+                        self.help();
+                        continue;
+                    }
+                    if !ctrl && code == KeyCode::Char('/') {
+                        if self.query.open() {
+                            self.sel = 0;
+                            self.rescope();
+                        }
                         self.editing = true;
                         continue;
                     }
@@ -589,9 +606,14 @@ impl App {
         Ok(())
     }
 
+    /// `?`: every key, in a reader over the panes.
+    fn help(&mut self) {
+        self.modal = Some(Modal::help(HELP_ROWS));
+    }
+
     /// A key typed into the open filter, narrowing the list as it goes. Enter
     /// keeps what it found and Esc clears it.
-    fn filter_key(&mut self, code: KeyCode) {
+    fn filter_key(&mut self, code: KeyCode, key: KeyEvent) {
         let changed = match code {
             KeyCode::Enter => {
                 self.editing = false;
@@ -602,7 +624,7 @@ impl App {
                 self.query.clear();
                 true
             }
-            _ => self.query.on_key(code),
+            _ => self.query.on_key(key),
         };
         if changed {
             self.sel = 0;
@@ -660,7 +682,7 @@ impl App {
         } else if code == KeyCode::Char('d') {
             self.discard = self.current().map(|e| Discard {
                 entry: e.clone(),
-                typed: String::new(),
+                typed: Query::default(),
             });
         } else if code == KeyCode::Char('r') {
             reload = true;
@@ -680,7 +702,7 @@ impl App {
 /// reload under it cannot change which file goes.
 struct Discard {
     entry: Entry,
-    typed: String,
+    typed: Query,
 }
 
 impl Discard {
@@ -902,7 +924,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let labels: Vec<&str> = SCOPES.iter().map(|s| s.label()).collect();
     let mut spans = scope_tabs(&labels, app.scope_idx);
     spans.push(Span::raw(format!(" {count}")));
-    spans.extend(app.query.title_span('/', app.editing, true));
+    spans.extend(app.query.title_span("/", app.editing, true));
     spans.push(Span::raw(" "));
     let top_title = Line::from(spans);
     let list = List::new(items)
@@ -949,20 +971,30 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         app.diff_hscroll,
     );
 
-    let actions = [
-        "s stage".to_string(),
-        "u unstage".to_string(),
-        "space flip".to_string(),
-        "enter difftool".to_string(),
-        "d del".to_string(),
-        "r refresh".to_string(),
-    ];
+    // Every letter but `?` goes into the filter while it is typed, so its footer
+    // offers only keys that are not letters.
+    let (keys, help) = match app.editing {
+        true => (FILTER_KEYS.to_vec(), HELP),
+        false => (
+            vec![
+                "↵ difftool",
+                "s stage",
+                "u unstage",
+                "space flip",
+                DEL,
+                FIND,
+                REFRESH,
+                QUIT,
+            ],
+            HELP,
+        ),
+    };
     frame.render_widget(
         key_footer(
-            &actions,
+            &keys,
             app.note.as_ref(),
             app.command.as_ref(),
-            true,
+            Some(help),
             footer_row.width,
         ),
         footer_row,
@@ -971,38 +1003,94 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     if let Some(gate) = &app.discard {
         typed_popup(
             frame,
+            panes,
             gate.title(),
             Some(&gate.note()),
             gate.entry.base_name(),
             &gate.typed,
-            "delete",
+            "del",
         );
     }
     if let Some(modal) = &mut app.modal {
-        modal.draw(frame);
+        modal.draw(frame, panes);
     }
 }
 
-/// Every key the view answers to, for the box `:help` opens.
-fn help() -> Vec<(String, String)> {
-    let row = |k: &str, d: &str| (k.to_string(), d.to_string());
-    vec![
-        row(Y_MOVE, "move (hold to speed up)"),
-        row(X_MOVE, "switch tab"),
-        row("/", "filter the files by path"),
-        row("s", "stage the file"),
-        row("u", "unstage it"),
-        row("S", "stage every file the list shows"),
-        row("U", "unstage every file the list shows"),
-        row("space", "flip it between staged and not"),
-        row(CTRL_Y_MOVE, "scroll the diff"),
-        row(CTRL_X_MOVE, "pan it sideways"),
-        row("enter", "open the file in your git difftool"),
-        row("d", "delete its changes, or the file when git has no copy"),
-        row("r", "read it again from git"),
-        row("q", "quit"),
-    ]
-}
+/// Every key the view answers to, for the reader `?` opens. The panel scrolls,
+/// so a new row costs nothing but its line.
+const HELP_ROWS: &[HelpSection] = &[
+    (
+        "moving",
+        &[
+            (Y_MOVE, "move a file"),
+            (X_MOVE, "the previous, next tab"),
+            ("", "a held key speeds up"),
+        ],
+    ),
+    (
+        "diff",
+        &[
+            (CTRL_Y_MOVE, "scroll"),
+            (CTRL_X_MOVE, "pan"),
+            ("↵", "git difftool"),
+        ],
+    ),
+    (
+        "stage",
+        &[
+            ("s", "stage"),
+            ("u", "unstage"),
+            ("space", "flip between the two"),
+            ("S", "stage every file the list shows"),
+            ("U", "unstage every file the list shows"),
+        ],
+    ),
+    (
+        "delete",
+        &[
+            ("d", "delete its changes, or the file when git has no copy"),
+            ("", "asks for its name first"),
+        ],
+    ),
+    (
+        "every screen",
+        &[
+            ("/", "find"),
+            ("r", "refresh"),
+            (":", "a command (:q quits)"),
+            ("?", "this help"),
+            ("q esc", "quit"),
+            ("ctrl-c", "quit, or esc in a box or the filter"),
+        ],
+    ),
+    (
+        "in a box",
+        &[
+            ("type", "the name"),
+            ("↵", "delete"),
+            (Y_MOVE, "scroll a long one"),
+            ("esc", "cancel, or close a long one"),
+        ],
+    ),
+    (
+        "in a find",
+        &[
+            ("type", "filter"),
+            ("↵", "keep"),
+            ("esc", "back"),
+            ("?", "help"),
+        ],
+    ),
+    (
+        "in this help",
+        &[
+            (Y_MOVE, "scroll"),
+            ("ctrl-d ctrl-u", "half a page down, up"),
+            ("g G", "the top, the bottom"),
+            ("esc q ?", "close"),
+        ],
+    ),
+];
 
 /// Which side of the diff the bottom pane is showing.
 fn diff_tag(e: &Entry, scope: Scope) -> &'static str {

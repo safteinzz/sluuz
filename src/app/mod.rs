@@ -96,7 +96,7 @@ pub struct Sel {
     /// row that was selected can come back at a different position, or not at
     /// all - in which case the cursor simply stays at the top.
     pub restore: Option<String>,
-    /// What `/` (or `?` on the pane below) narrowed this list to.
+    /// What `/` (or `ctrl-f` on the pane below) narrowed this list to.
     pub query: Query,
 }
 
@@ -218,8 +218,8 @@ impl Feed {
 }
 
 /// Which of a level's two lists a filter key opens: `/` the one plain keys
-/// drive, `?` the pane below it. Naming them by position rather than by list
-/// keeps one pair of keys meaning the same thing at every level.
+/// drive, `ctrl-f` the pane below it. Naming them by position rather than by
+/// list keeps one pair of keys meaning the same thing at every level.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Pane {
     Top,
@@ -228,12 +228,12 @@ pub enum Pane {
 
 impl Pane {
     /// The key that opens this pane's filter, which is also how the filter is
-    /// written on its title: a query typed with `?` reading back as `/` is the
-    /// pane telling you it went somewhere else.
-    pub fn sigil(self) -> char {
+    /// written on its title: a query typed with `ctrl-f` reading back as `/` is
+    /// the pane telling you it went somewhere else.
+    pub fn sigil(self) -> &'static str {
         match self {
-            Pane::Top => '/',
-            Pane::Bottom => '?',
+            Pane::Top => "/",
+            Pane::Bottom => "ctrl-f",
         }
     }
 }
@@ -699,8 +699,11 @@ impl App {
         let Some(sel) = self.pane_sel(pane) else {
             return;
         };
-        sel.query.open();
+        let dropped = sel.query.open();
         self.editing = Some(pane);
+        if dropped {
+            self.refilter(pane);
+        }
     }
 
     /// Re-apply a pane's scope and filter to everything already loaded, which

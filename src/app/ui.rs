@@ -7,8 +7,9 @@ use crate::git::RepoStatus;
 use crate::git::load::{RemoteTags, Tag, TagState};
 use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE};
 use crate::tui::widgets::{
-    commit_item, confirm_popup, diff_hscrollbar, diff_scrollbar, file_item, key_footer,
-    list_scrollbar, pane_block, scope_tabs, typed_popup,
+    DEL, FILTER_KEYS, FIND, HELP, HelpSection, Modal, QUIT, REFRESH, commit_item, confirm_popup,
+    diff_hscrollbar, diff_scrollbar, file_item, key_footer, list_scrollbar, pane_block, scope_tabs,
+    typed_popup,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -31,8 +32,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(panes);
 
     // Which of the two panes a typed filter is going into. Only one at a time,
-    // and it is the pane's own title that shows it, so `/` and `?` can never be
-    // confused for each other.
+    // and it is the pane's own title that shows it, so `/` and `ctrl-f` can
+    // never be confused for each other.
     let (edit_top, edit_bot) = (
         app.editing == Some(Pane::Top),
         app.editing == Some(Pane::Bottom),
@@ -173,12 +174,18 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             diff(frame, bottom, app);
         }
     }
+    // Every letter but `?` goes into a filter being typed, so its footer offers
+    // only keys that are not letters.
+    let (keys, help) = match app.editing {
+        Some(_) => (FILTER_KEYS.to_vec(), HELP),
+        None => (actions(app), HELP),
+    };
     frame.render_widget(
         key_footer(
-            &actions(app),
+            &keys,
             app.note.as_ref(),
             app.command.as_ref(),
-            true,
+            Some(help),
             footer_row.width,
         ),
         footer_row,
@@ -189,6 +196,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     {
         typed_popup(
             frame,
+            panes,
             &c.target.title(),
             c.target.note().as_deref(),
             &c.target.name(),
@@ -198,6 +206,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     } else if let Some(c) = &app.confirm {
         confirm_popup(
             frame,
+            panes,
             c.target.colour(),
             &c.target.title(),
             &c.target.name(),
@@ -206,118 +215,193 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
     if let Some(modal) = &mut app.modal {
-        modal.draw(frame);
+        modal.draw(frame, panes);
     }
 }
 
-/// The footer's share of a level's keys: what it can *do*, most used first so
-/// a narrow window loses the least used. Moving is left out, since arrows need
-/// no teaching, and `:help` lists everything, movement included.
-fn actions(app: &App) -> Vec<String> {
+/// The footer's share of a level's keys: what it can *do*, in the house order
+/// (`↵`, the level's own keys, `d del`, then `/ find · r refresh · q quit`), so
+/// a narrow window loses the least used. Moving is left out, since motions are
+/// tried rather than read, and `? help` lists everything, movement included.
+fn actions(app: &App) -> Vec<&'static str> {
     let mut keys = vec![match app.level {
-        Level::Commits => "enter diff".to_string(),
-        Level::Diff => "enter difftool".to_string(),
-        _ => "enter open".to_string(),
+        Level::Commits => "↵ diff",
+        Level::Diff => "↵ difftool",
+        _ => "↵ open",
     }];
     let undo = |branch: bool| app.undo.as_ref().is_some_and(|u| u.branch == branch);
+    let mut del = false;
     match app.level {
-        Level::Repos => keys.extend(["s sync all".to_string(), "S pull all".to_string()]),
+        Level::Repos => keys.extend(["s sync all", "S pull all"]),
         Level::Branches => {
-            keys.push("d delete branch".to_string());
+            keys.extend(["s sync", "S pull"]);
             if undo(true) {
-                keys.push("u undo".to_string());
+                keys.push("u undo");
             }
-            keys.extend(["s sync".to_string(), "S pull".to_string()]);
+            del = true;
         }
         Level::Tags => {
-            keys.push("d delete tag".to_string());
-            if undo(false) {
-                keys.push("u undo".to_string());
-            }
             if app.can_track() {
-                keys.push("t track".to_string());
+                keys.push("t track");
             }
+            if undo(false) {
+                keys.push("u undo");
+            }
+            del = true;
         }
-        Level::Commits if app.stashes => keys.extend([
-            "a apply".to_string(),
-            "p pop".to_string(),
-            "d drop".to_string(),
-        ]),
+        Level::Commits if app.stashes => {
+            keys.extend(["a apply", "p pop"]);
+            del = true;
+        }
         _ => {}
     }
-    keys.push("K inspect".to_string());
-    keys.push("r refresh".to_string());
+    keys.push("K inspect");
+    if del {
+        keys.push(DEL);
+    }
+    // the diff has no list of its own for `/` to narrow
+    if app.level != Level::Diff {
+        keys.push(FIND);
+    }
+    keys.extend([REFRESH, QUIT]);
     keys
 }
 
-/// Every key a level answers to, for the box `:help` opens.
-fn help(app: &App) -> Vec<(String, String)> {
-    let row = |k: &str, d: &str| (k.to_string(), d.to_string());
-    let below = match app.level {
-        Level::Repos => "branches",
-        Level::Branches | Level::Tags => "commits",
-        _ => "files",
+/// The motions every level shares. The stash has no tabs to switch between,
+/// so it gets the same group without `h/l`.
+const MOVING: HelpSection = (
+    "moving",
+    &[
+        (Y_MOVE, "move a row"),
+        (X_MOVE, "the previous, next tab"),
+        ("", "a held key speeds up"),
+    ],
+);
+const MOVING_STASH: HelpSection = (
+    "moving",
+    &[(Y_MOVE, "move a row"), ("", "a held key speeds up")],
+);
+const BELOW: HelpSection = (
+    "the pane below",
+    &[(CTRL_Y_MOVE, "move in it"), ("ctrl-f", "find in it")],
+);
+const EVERYWHERE: HelpSection = (
+    "every screen",
+    &[
+        ("↵", "open"),
+        ("esc", "back"),
+        ("/", "find"),
+        ("K", "inspect the row"),
+        ("r", "refresh"),
+        (":", "a command (:q quits)"),
+        ("?", "this help"),
+        ("q", "quit"),
+        ("ctrl-c", "quit, or esc in a box or a filter"),
+    ],
+);
+const REPOS: HelpSection = (
+    "repos",
+    &[
+        ("s", "sync every repo (fetch, prune)"),
+        ("S", "sync and pull"),
+    ],
+);
+const BRANCHES: HelpSection = (
+    "branches",
+    &[
+        ("s", "sync (fetch, prune)"),
+        ("S", "sync and pull this one"),
+        ("d", "delete, asking first"),
+        ("u", "put back the last delete"),
+    ],
+);
+const TAGS: HelpSection = (
+    "tags",
+    &[
+        ("t", "keep a copy of the remote's tags"),
+        ("d", "delete"),
+        ("u", "put back the last delete"),
+    ],
+);
+const COMMITS: HelpSection = ("commits", &[("↵", "the selected file's diff")]);
+const STASHES: HelpSection = (
+    "stashes",
+    &[
+        ("↵", "the selected file's diff"),
+        ("a", "apply"),
+        ("p", "pop"),
+        ("d", "delete, asking its name first"),
+    ],
+);
+const DIFF: HelpSection = (
+    "diff",
+    &[
+        ("↵", "git difftool"),
+        (CTRL_Y_MOVE, "scroll"),
+        (CTRL_X_MOVE, "pan"),
+    ],
+);
+const IN_A_BOX: HelpSection = (
+    "in a box",
+    &[
+        ("y n", "answer"),
+        (X_MOVE, "pick"),
+        ("↵", "select"),
+        (Y_MOVE, "scroll a long one"),
+        ("esc", "cancel, or close a long one"),
+    ],
+);
+const IN_A_FIND: HelpSection = (
+    "in a find",
+    &[
+        ("type", "filter"),
+        ("↵", "keep"),
+        ("esc", "back"),
+        ("?", "help"),
+    ],
+);
+const IN_THIS_HELP: HelpSection = (
+    "in this help",
+    &[
+        (Y_MOVE, "scroll"),
+        ("ctrl-d ctrl-u", "half a page down, up"),
+        ("g G", "the top, the bottom"),
+        ("esc q ?", "close"),
+    ],
+);
+
+/// Every key the app answers to, grouped by screen, for the reader `?` opens:
+/// the keys every level shares, then each level this app can reach from where
+/// it was entered, so `ilog` does not list the repos it never shows. The panel
+/// scrolls, so a new row costs nothing but its line.
+fn help(app: &App) -> Vec<HelpSection> {
+    let moving = match app.stashes {
+        true => MOVING_STASH,
+        false => MOVING,
     };
-    if app.level == Level::Diff {
-        return vec![
-            row(CTRL_Y_MOVE, "scroll the diff"),
-            row(CTRL_X_MOVE, "pan it sideways"),
-            row("enter", "open the file in your git difftool"),
-            row("K", "everything about the commit"),
-            row("r", "read the commits again and reopen this file"),
-            row("esc", "back to the commits"),
-            row("q", "quit"),
-        ];
+    let mut sections = vec![moving, BELOW, EVERYWHERE];
+    let reaches = |level: Level| match level {
+        Level::Tags => app.start == Level::Tags,
+        Level::Commits => !app.stashes,
+        level => app.start <= level,
+    };
+    if reaches(Level::Repos) {
+        sections.push(REPOS);
     }
-    let mut rows = vec![row(Y_MOVE, "move (hold to speed up)")];
-    if !app.stashes {
-        rows.push(row(X_MOVE, "switch tab"));
+    if reaches(Level::Branches) {
+        sections.push(BRANCHES);
     }
-    rows.extend([
-        (
-            CTRL_Y_MOVE.to_string(),
-            format!("move in the {below} below"),
-        ),
-        ("/ ?".to_string(), format!("filter this list / the {below}")),
-        row(
-            "enter",
-            if app.level == Level::Commits {
-                "open the file's diff"
-            } else {
-                "open it"
-            },
-        ),
-    ]);
-    match app.level {
-        Level::Repos => rows.extend([
-            row("s", "sync every repo listed: fetch and prune"),
-            row("S", "sync them and pull each checked-out branch"),
-        ]),
-        Level::Branches => rows.extend([
-            row("d", "delete branch (asks first)"),
-            row("u", "put back the last delete"),
-            row("s", "sync: fetch and prune"),
-            row("S", "sync and pull the checked-out branch"),
-        ]),
-        Level::Tags => rows.extend([
-            row("d", "delete tag (asks first)"),
-            row("u", "put back the last delete"),
-            row("t", "show push marks instantly"),
-        ]),
-        Level::Commits if app.stashes => rows.extend([
-            row("a", "apply the stash, keeping it"),
-            row("p", "pop it: apply, then drop it"),
-            row("d", "drop it (asks first)"),
-        ]),
-        _ => {}
+    if reaches(Level::Tags) {
+        sections.push(TAGS);
     }
-    rows.extend([
-        row("K", "everything about the row under the cursor"),
-        row("r", "read it again from git"),
-        row("esc", "back"),
-        row("q", "quit"),
-    ]);
-    rows
+    if reaches(Level::Commits) {
+        sections.push(COMMITS);
+    }
+    if app.stashes {
+        sections.push(STASHES);
+    }
+    sections.extend([DIFF, IN_A_BOX, IN_A_FIND, IN_THIS_HELP]);
+    sections
 }
 
 /// Render one list pane with its scrollbar.
@@ -741,19 +825,8 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 impl App {
-    pub(super) fn help_rows(&self) -> Vec<(String, String)> {
-        help(self)
-    }
-
-    pub(super) fn help_title(&self) -> String {
-        let screen = match self.level {
-            Level::Repos => "repos",
-            Level::Branches => "branches",
-            Level::Tags => "tags",
-            Level::Commits if self.stashes => "stashes",
-            Level::Commits => "commits",
-            Level::Diff => "diff",
-        };
-        format!("keys · {screen}")
+    /// `?`: every key, in a reader over the panes.
+    pub(super) fn help(&mut self) {
+        self.modal = Some(Modal::help(&help(self)));
     }
 }

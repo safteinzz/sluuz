@@ -6,15 +6,25 @@
 use ratatui::crossterm::event::KeyCode;
 use std::time::{Duration, Instant};
 
-/// Key-hint labels shown in pane titles, defined once so every pane reads the
-/// same. `Y_MOVE`/`X_MOVE` are plain vertical/horizontal navigation (arrows and
-/// hjkl both work everywhere); the `CTRL_` variants are the modifier forms used
-/// for the bottom pane - Ctrl-arrows are the terminal-safe way to send them,
+/// The motions as the help panel spells them, defined once so every screen's
+/// help reads the same: the vim keys, a space, the arrows. The `CTRL_` forms
+/// drive the bottom pane; Ctrl-arrows are the terminal-safe way to send them,
 /// since some terminals can't send a distinct Ctrl-letter.
-pub const Y_MOVE: &str = "↑↓/jk";
-pub const CTRL_Y_MOVE: &str = "ctrl-↑↓/jk";
-pub const X_MOVE: &str = "←→/hl";
-pub const CTRL_X_MOVE: &str = "ctrl-←→/hl";
+pub const Y_MOVE: &str = "j/k ↑↓";
+pub const CTRL_Y_MOVE: &str = "ctrl-j/k ↑↓";
+pub const X_MOVE: &str = "h/l ←→";
+pub const CTRL_X_MOVE: &str = "ctrl-h/l ←→";
+
+/// Ctrl-C: what Esc does under a box, in a filter or in a form, and quit on a
+/// view.
+pub fn is_ctrl_c(code: KeyCode, ctrl: bool) -> bool {
+    ctrl && code == KeyCode::Char('c')
+}
+
+/// `?`: the help panel, on every screen, a query being typed included.
+pub fn is_help(code: KeyCode) -> bool {
+    code == KeyCode::Char('?')
+}
 
 // ── shared key predicates (arrow keys mirror j/k everywhere) ────────────────
 

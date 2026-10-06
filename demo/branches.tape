@@ -40,7 +40,7 @@ Sleep 1.8s
 Type "h"
 Type "h"
 Sleep 1.2s
-# `/` narrows the list the plain keys drive, `?` the commits under it, and both
+# `/` narrows the list the plain keys drive, `ctrl-f` the commits under it, and both
 # say on their own title which key opened them
 Type "/"
 Sleep 500ms
@@ -48,7 +48,7 @@ Type "fix"
 Sleep 1.8s
 Escape
 Sleep 500ms
-Type "?"
+Ctrl+F
 Sleep 500ms
 Type "health"
 Sleep 1.8s

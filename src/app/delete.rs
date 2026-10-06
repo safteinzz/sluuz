@@ -10,7 +10,7 @@
 use super::{App, Sel};
 use crate::git::load::{self, RemoteTags, TagState};
 use crate::git::{git_capture, git_run};
-use crate::tui::widgets::Modal;
+use crate::tui::widgets::{Modal, Query};
 use ratatui::style::Color;
 
 pub(super) use crate::git::GIT_WORDS;
@@ -33,14 +33,14 @@ pub(super) struct Confirm {
     /// Which button is lit. A delete opens on No, the offer to track on Yes.
     pub(super) yes: bool,
     /// What has been typed, for a target that has to be named to go ahead.
-    pub(super) typed: String,
+    pub(super) typed: Query,
 }
 
 impl Confirm {
     pub(super) fn new(target: Target) -> Confirm {
         Confirm {
             yes: matches!(target, Target::Track(_)),
-            typed: String::new(),
+            typed: Query::default(),
             target,
         }
     }
@@ -170,11 +170,11 @@ impl Target {
         }
     }
 
-    /// What Enter does in the typed gate.
+    /// What Enter does in the typed gate: `drop`, git's own word, for a stash.
     pub(super) fn verb(&self) -> &'static str {
         match self {
             Target::Stash { .. } => "drop",
-            _ => "delete",
+            _ => "del",
         }
     }
 

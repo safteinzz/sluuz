@@ -194,16 +194,17 @@ Multi-repo commands take a `path` (default `.`) and `-d, --depth <N>` (default
 
 | key | does |
 | --- | --- |
-| `j` `k` / `↑` `↓` | move, faster the longer you hold it; with `Ctrl`, move the pane below or scroll a diff |
-| `h` `l` / `←` `→` | switch tab; with `Ctrl`, pan a diff sideways |
-| `/` `?` | filter the top pane / the pane below; every space-separated term has to match |
-| `Enter` | open what is under the cursor |
-| `Esc` | step back out |
+| `j` `k` / `↑` `↓` | move, faster the longer you hold it; with `ctrl`, move the pane below or scroll a diff |
+| `h` `l` / `←` `→` | switch tab; with `ctrl`, pan a diff sideways |
+| `/` | filter the top pane, every space-separated term has to match; `↵` keeps it, `esc` drops it |
+| `ctrl-f` | the same for the pane below |
+| `↵` | open what is under the cursor |
+| `esc` | step back out; cancel a question, close help or an alert |
 | `r` | read it again from git, keeping the cursor on what it was on |
-| `q` / `:q` | quit |
+| `?` | every key, on every screen |
+| `q` / `ctrl-c` | quit; in a box or a filter, `ctrl-c` is `esc` |
 
-Each screen's own keys are on its bottom row, and `:help` lists every key it
-answers to.
+Each screen's own keys are on its bottom row, and `?` lists them all.
 
 ## Tab completion
 

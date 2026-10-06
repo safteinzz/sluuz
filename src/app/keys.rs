@@ -2,26 +2,36 @@
 //!
 //! The shape is the same everywhere: plain keys drive the top pane, Ctrl drives
 //! the pane below it, `h`/`l` slide that level's scope, Enter drills in and Esc
-//! steps back out.
+//! steps back out. `/` filters the top pane and `ctrl-f` the one below.
 
 use super::{App, Level, Pane, branches, commits, repos, tags};
-use crate::tui::input::{is_back, is_down, is_left, is_open, is_right, is_up, norm_esc};
-use crate::tui::widgets::{Command, CommandLine, Modal, Typed};
+use crate::tui::input::{
+    is_back, is_ctrl_c, is_down, is_help, is_left, is_open, is_right, is_up, norm_esc,
+};
+use crate::tui::widgets::{Command, CommandLine, Typed};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Handle one key press. Returns true when the app should quit.
 pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTerminal) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let code = norm_esc(key.code, ctrl);
+    let mut code = norm_esc(key.code, ctrl);
 
-    // Ctrl-C quits from anywhere, even out from under a modal.
-    if ctrl && code == KeyCode::Char('c') {
-        return true;
+    // Ctrl-C is Esc under a box, in the `:` line or in a filter, and quits from
+    // the view itself.
+    if is_ctrl_c(code, ctrl) {
+        let open = app.modal.is_some()
+            || app.confirm.is_some()
+            || app.command.is_some()
+            || app.editing.is_some();
+        if !open {
+            return true;
+        }
+        code = KeyCode::Esc;
     }
     // A modal owns every key until it is dismissed.
     if let Some(modal) = &mut app.modal {
-        if modal.on_key(code) {
+        if modal.on_key(code, ctrl) {
             app.modal = None;
         }
         return false;
@@ -32,17 +42,15 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
         && confirm.target.typed()
     {
         match code {
-            KeyCode::Enter if confirm.typed == confirm.target.name() => {
+            KeyCode::Enter if confirm.typed.text == confirm.target.name() => {
                 if let Some(confirm) = app.confirm.take() {
                     app.delete(confirm.target);
                 }
             }
             KeyCode::Esc => app.confirm = None,
-            KeyCode::Backspace => {
-                confirm.typed.pop();
+            _ => {
+                confirm.typed.on_key(key);
             }
-            KeyCode::Char(c) => confirm.typed.push(c),
-            _ => {}
         }
         return false;
     }
@@ -70,39 +78,45 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
             Typed::Run(run) => {
                 app.command = None;
                 match run {
-                    Command::Help => {
-                        app.modal = Some(Modal::reader(app.help_title(), &app.help_rows()))
-                    }
+                    Command::Help => app.help(),
                     Command::Quit => return true,
                     Command::Unknown(what) => {
-                        app.set_failed(format!("unknown command `{what}` · :help lists the keys"))
+                        app.set_failed(format!("unknown command `{what}` · ? lists every key"))
                     }
                 }
             }
         }
         return false;
     }
-    // So does an open query bar - `q` types a letter there, it does not quit.
+    // So does an open query bar: `q` types there, but `?` still opens help.
     if let Some(pane) = app.editing {
-        query_key(app, pane, code);
+        if is_help(code) {
+            app.help();
+        } else {
+            query_key(app, pane, code, key);
+        }
         return false;
     }
 
     if code == KeyCode::Char('q') {
         return true;
     }
+    if is_help(code) {
+        app.help();
+        return false;
+    }
     if code == KeyCode::Char(':') {
         app.command = Some(CommandLine::default());
         return false;
     }
 
-    // `/` narrows the list plain keys drive, `?` the pane below it - the same
-    // split as every other key at every level.
-    if code == KeyCode::Char('/') {
+    // `/` narrows the list plain keys drive, `ctrl-f` the pane below it: the
+    // same split as every other key at every level.
+    if !ctrl && code == KeyCode::Char('/') {
         app.open_query(Pane::Top);
         return false;
     }
-    if code == KeyCode::Char('?') {
+    if ctrl && code == KeyCode::Char('f') {
         app.open_query(Pane::Bottom);
         return false;
     }
@@ -139,7 +153,7 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
 /// The query bar has focus: a plain text field over one pane's list, narrowing
 /// it as it is typed. Enter keeps what it found and Esc clears it, so a filter
 /// is never left on a pane with no way to see it went there.
-fn query_key(app: &mut App, pane: Pane, code: KeyCode) {
+fn query_key(app: &mut App, pane: Pane, code: KeyCode, key: KeyEvent) {
     if code == KeyCode::Enter {
         app.editing = None;
         return;
@@ -156,7 +170,7 @@ fn query_key(app: &mut App, pane: Pane, code: KeyCode) {
         app.editing = None;
         return;
     };
-    if sel.query.on_key(code) {
+    if sel.query.on_key(key) {
         app.refilter(pane);
     }
 }

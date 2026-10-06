@@ -143,11 +143,11 @@ enum Cmd {
     #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
     /// Interactive git status - stage/unstage + diffs (TUI)
-    ///   this repo · ←→/hl tabs · s/u/space stage
+    ///   this repo · h/l ←→ tabs · s/u/space stage
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),
     /// Interactive stash explorer (TUI)
-    ///   every stash, its files and diffs · a applies, p pops, d drops
+    ///   every stash, its files and diffs · a applies, p pops, d deletes
     #[command(verbatim_doc_comment)]
     Istash(commands::istash::Args),
     /// Any other command is passed straight through to git

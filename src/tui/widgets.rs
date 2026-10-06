@@ -3,10 +3,10 @@
 
 use crate::git::load::{Commit, FileEntry, RefKind, RefLabel, fit_refs};
 use crate::tui::clamp_scroll;
-use crate::tui::input::{X_MOVE, char_to_byte, is_back, is_down, is_up};
+use crate::tui::input::{char_to_byte, is_back, is_down, is_up};
 use ratatui::Frame;
-use ratatui::crossterm::event::KeyCode;
-use ratatui::layout::{Margin, Rect};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -116,6 +116,28 @@ pub fn pane_block(title: impl Into<Line<'static>>, active: bool) -> Block<'stati
 /// How long a note sits in a view's footer before the key hints come back.
 pub const NOTE: Duration = Duration::from_secs(3);
 
+// The words every footer and key row is built from, so the same key reads the
+// same on every screen and a hand-typed legend stands out.
+pub const DEL: &str = "d del";
+pub const FIND: &str = "/ find";
+pub const REFRESH: &str = "r refresh";
+pub const QUIT: &str = "q quit";
+pub const HELP: &str = "? help";
+pub const KEEP: &str = "↵ keep";
+pub const SELECT: &str = "↵ select";
+pub const BACK: &str = "esc back";
+pub const CANCEL: &str = "esc cancel";
+pub const CLOSE: &str = "esc close";
+pub const SEP: &str = " · ";
+
+/// The key rows of the box kinds, each written by that kind's drawing function.
+pub const GATE_KEYS: &[&str] = &[SELECT, CANCEL];
+pub const READER_KEYS: &[&str] = &[CLOSE];
+
+/// The footer of a pane whose filter is being typed into: every letter goes
+/// into the query, so only keys that are not letters are offered.
+pub const FILTER_KEYS: &[&str] = &[KEEP, BACK];
+
 /// What a `:` line asked for.
 pub enum Command {
     Help,
@@ -183,37 +205,95 @@ impl Query {
             .all(|term| row.contains(&term.to_lowercase()))
     }
 
-    /// Start typing again at the end of whatever a previous Enter kept.
-    pub fn open(&mut self) {
-        self.caret = self.text.chars().count();
+    /// Start a new query: `/` replaces whatever a previous Enter kept, as it
+    /// does in every app. True when that dropped a kept query, so the caller
+    /// filters again.
+    pub fn open(&mut self) -> bool {
+        let had = !self.text.is_empty();
+        self.text.clear();
+        self.caret = 0;
+        had
     }
 
-    /// A key typed into the open filter. Returns whether the text changed, so
-    /// the caller re-filters only then.
-    pub fn on_key(&mut self, code: KeyCode) -> bool {
-        let end = self.text.chars().count();
-        match code {
+    /// A key typed into the open filter, edited like a shell line: `←→`
+    /// `ctrl-b/f` a character, `alt-b/f` a word, `home`/`end` `ctrl-a/e` either
+    /// end, `backspace` `ctrl-h` `delete` `ctrl-d` a character, `alt-backspace`
+    /// `alt-d` a word, `ctrl-w` back to a space, `ctrl-u` everything before the
+    /// caret. Returns whether the text changed, so the caller re-filters only
+    /// then. Not `ctrl-k`, which a shell kills to the end with: it moves the
+    /// pane below everywhere else.
+    pub fn on_key(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let mut chars: Vec<char> = self.text.chars().collect();
+        let len = chars.len();
+        let mut at = self.caret.min(len);
+        match key.code {
+            KeyCode::Left => at = at.saturating_sub(1),
+            KeyCode::Right => at = (at + 1).min(len),
+            KeyCode::Home => at = 0,
+            KeyCode::End => at = len,
+            KeyCode::Backspace if alt || ctrl => {
+                let from = word_start(&chars, at, char::is_alphanumeric);
+                chars.drain(from..at);
+                at = from;
+            }
+            KeyCode::Backspace if at > 0 => {
+                chars.remove(at - 1);
+                at -= 1;
+            }
+            KeyCode::Delete if at < len => {
+                chars.remove(at);
+            }
+            KeyCode::Char(c) if ctrl => match c {
+                'a' => at = 0,
+                'e' => at = len,
+                'b' => at = at.saturating_sub(1),
+                'f' => at = (at + 1).min(len),
+                'h' if at > 0 => {
+                    chars.remove(at - 1);
+                    at -= 1;
+                }
+                'd' if at < len => {
+                    chars.remove(at);
+                }
+                // back to a space, so a whole path goes at once
+                'w' => {
+                    let from = word_start(&chars, at, |c| !c.is_whitespace());
+                    chars.drain(from..at);
+                    at = from;
+                }
+                'u' => {
+                    chars.drain(..at);
+                    at = 0;
+                }
+                _ => {}
+            },
+            KeyCode::Char(c) if alt => match c {
+                'b' => at = word_start(&chars, at, char::is_alphanumeric),
+                'f' => at = word_end(&chars, at),
+                'd' => {
+                    let to = word_end(&chars, at);
+                    chars.drain(at..to);
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
-                self.text.insert(char_to_byte(&self.text, self.caret), c);
-                self.caret += 1;
-                return true;
+                chars.insert(at, c);
+                at += 1;
             }
-            KeyCode::Backspace if self.caret > 0 => {
-                self.text.remove(char_to_byte(&self.text, self.caret - 1));
-                self.caret -= 1;
-                return true;
-            }
-            KeyCode::Delete if self.caret < end => {
-                self.text.remove(char_to_byte(&self.text, self.caret));
-                return true;
-            }
-            KeyCode::Left => self.caret = self.caret.saturating_sub(1),
-            KeyCode::Right if self.caret < end => self.caret += 1,
-            KeyCode::Home => self.caret = 0,
-            KeyCode::End => self.caret = end,
             _ => {}
         }
-        false
+        self.caret = at;
+        let text: String = chars.into_iter().collect();
+        let changed = text != self.text;
+        self.text = text;
+        changed
+    }
+
+    /// The text split at the caret, for drawing it with the caret between.
+    pub fn split(&self) -> (&str, &str) {
+        self.text.split_at(char_to_byte(&self.text, self.caret))
     }
 
     pub fn clear(&mut self) {
@@ -224,20 +304,20 @@ impl Query {
     /// The filter as its pane's title shows it, led by `key`, the key that
     /// opened it, so a query can never look like it went to the other pane. A
     /// `filterable` pane with nothing typed offers that key instead, dimmed.
-    pub fn title_span(&self, key: char, editing: bool, filterable: bool) -> Option<Span<'static>> {
-        let text = &self.text;
+    pub fn title_span(&self, key: &str, editing: bool, filterable: bool) -> Option<Span<'static>> {
+        // `/fix`, but `ctrl-f fix`: a key that is a word needs the space
+        let lead = match key.chars().count() {
+            1 => key.to_string(),
+            _ => format!("{key} "),
+        };
         if editing {
-            let at = char_to_byte(text, self.caret);
-            Some(Span::raw(format!(
-                "   {key}{}▏{}",
-                &text[..at],
-                &text[at..]
-            )))
-        } else if !text.is_empty() {
-            Some(Span::raw(format!("   {key}{text}")))
+            let (before, after) = self.split();
+            Some(Span::raw(format!("   {lead}{before}▏{after}")))
+        } else if !self.text.is_empty() {
+            Some(Span::raw(format!("   {lead}{}", self.text)))
         } else if filterable {
             Some(Span::styled(
-                format!("   {key} filter"),
+                format!("   {key} find"),
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::DIM),
@@ -248,46 +328,71 @@ impl Query {
     }
 }
 
+/// Where the word ending at `at` starts: skip what is not part of a word, then
+/// what is.
+fn word_start(chars: &[char], mut at: usize, in_word: fn(char) -> bool) -> usize {
+    while at > 0 && !in_word(chars[at - 1]) {
+        at -= 1;
+    }
+    while at > 0 && in_word(chars[at - 1]) {
+        at -= 1;
+    }
+    at
+}
+
+fn word_end(chars: &[char], mut at: usize) -> usize {
+    while at < chars.len() && !chars[at].is_alphanumeric() {
+        at += 1;
+    }
+    while at < chars.len() && chars[at].is_alphanumeric() {
+        at += 1;
+    }
+    at
+}
+
 /// The row under a view: the keys it answers to, or for `NOTE` what the last
 /// action came to, green when it worked and yellow when it did not, or the `:`
 /// line while one is open. Keys live here rather than on pane borders, which
-/// only have room for what a pane is. `:help`, when `help` says the view takes
-/// it, is kept at the right edge however narrow the window, since it is the way
-/// to every key that falls off.
+/// only have room for what a pane is. `help` (`HELP`)
+/// is kept at the right edge however narrow the window, since it is the
+/// way to every key that falls off.
 pub fn key_footer(
-    actions: &[String],
+    actions: &[&str],
     note: Option<&(bool, String)>,
     command: Option<&CommandLine>,
-    help: bool,
+    help: Option<&str>,
     width: u16,
 ) -> Paragraph<'static> {
     let dim = Style::default().fg(Color::DarkGray);
-    let line = match (command, note) {
-        (Some(cmd), _) => {
+    let line = match (command, note, help) {
+        (Some(cmd), _, _) => {
             let mut spans = vec![Span::raw(format!(" :{}▏", cmd.text))];
             if cmd.text.is_empty() {
                 spans.push(Span::styled("help", dim.add_modifier(Modifier::DIM)));
             }
             Line::from(spans)
         }
-        (None, Some((true, text))) => Line::from(Span::styled(
+        (None, Some((true, text)), _) => Line::from(Span::styled(
             format!(" ✓ {text}"),
             Style::default().fg(Color::Green),
         )),
-        (None, Some((false, text))) => Line::from(Span::styled(
+        (None, Some((false, text)), _) => Line::from(Span::styled(
             format!(" ✗ {text}"),
             Style::default().fg(Color::Yellow),
         )),
-        (None, None) if !help => Line::from(Span::styled(fit(actions, width), dim)),
-        (None, None) => {
-            const HELP: &str = ":help ";
-            let room = (width as usize).saturating_sub(HELP.len() + 2);
+        (None, None, None) => Line::from(Span::styled(fit(actions, width), dim)),
+        (None, None, Some(help)) => {
+            let pin = format!("{help} ");
+            let pin_w = pin.chars().count();
+            // a gap before the pin as wide as a separator, so it never reads
+            // as part of the last key
+            let room = (width as usize).saturating_sub(pin_w + SEP.chars().count());
             let left = fit(actions, room as u16);
-            let pad = (width as usize).saturating_sub(left.chars().count() + HELP.len());
+            let pad = (width as usize).saturating_sub(left.chars().count() + pin_w);
             Line::from(vec![
                 Span::styled(left, dim),
                 Span::raw(" ".repeat(pad)),
-                Span::styled(HELP, dim),
+                Span::styled(pin, dim),
             ])
         }
     };
@@ -296,13 +401,13 @@ pub fn key_footer(
 
 /// As many whole keys as fit in `width`, in order: a key cut off mid-word says
 /// less than one left off.
-fn fit(keys: &[String], width: u16) -> String {
+fn fit(keys: &[&str], width: u16) -> String {
     let mut line = String::new();
     for key in keys {
         let next = if line.is_empty() {
             format!(" {key}")
         } else {
-            format!("{line} · {key}")
+            format!("{line}{SEP}{key}")
         };
         if next.chars().count() > width as usize {
             break;
@@ -351,41 +456,28 @@ pub fn scope_tabs(labels: &[&str], picked: usize) -> Vec<Span<'static>> {
     spans
 }
 
-/// Draw a vertical scrollbar down the right edge of `area`, with the thumb at
-/// `top` of `total` rows. No bar is drawn when everything already fits.
-fn render_vscrollbar(frame: &mut Frame, area: Rect, total: usize, top: usize) {
-    let viewport = area.height.saturating_sub(2) as usize;
-    if total <= viewport {
-        return; // everything fits; no scrollbar needed
+/// A scrollbar on `area`'s right border for `total` rows, `view` of them on
+/// screen from `top`, where `area` is the bordered rect it sits on. Nothing is
+/// drawn when every row fits.
+pub fn vscrollbar(frame: &mut Frame, area: Rect, total: usize, top: usize, view: usize) {
+    if total <= view {
+        return;
     }
-    let mut state = ScrollbarState::new(total - viewport).position(top);
+    let mut state = ScrollbarState::new(total - view).position(top);
     let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(None)
         .end_symbol(None);
     frame.render_stateful_widget(bar, area.inner(Margin::new(0, 1)), &mut state);
 }
 
-/// Scrollbar for a diff pane: thumb tracks the scroll line.
-pub fn diff_scrollbar(frame: &mut Frame, area: Rect, total_lines: usize, scroll: u16) {
-    render_vscrollbar(frame, area, total_lines, scroll as usize);
-}
-
-/// Scrollbar for a list pane: thumb tracks the visible window (the list's
-/// `offset`). Call it right after rendering the list so the offset is current.
-pub fn list_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize) {
-    render_vscrollbar(frame, area, total, offset);
-}
-
-/// Horizontal scrollbar along a diff pane's bottom border. `max_line` is the
-/// widest content line, `cell_w` the visible columns per side, `hscroll` the pan
-/// offset. Drawn only when the content is wider than one cell (else there's
-/// nothing to pan). Kept off the corners with a 1-col horizontal inset.
-pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u16, hscroll: u16) {
-    let cell = cell_w as usize;
-    if max_line <= cell {
+/// A scrollbar on `area`'s bottom border for content `total` columns wide,
+/// `view` of them on screen from `left`, kept one column off each corner.
+/// Nothing is drawn when every column fits.
+pub fn hscrollbar(frame: &mut Frame, area: Rect, total: usize, left: usize, view: usize) {
+    if total <= view {
         return;
     }
-    let mut state = ScrollbarState::new(max_line - cell).position(hscroll as usize);
+    let mut state = ScrollbarState::new(total - view).position(left);
     // `■` renders vertically centered and medium-weight - between the too-thin,
     // low-sitting `▬` and the full-cell block `█`.
     let bar = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
@@ -393,6 +485,27 @@ pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u
         .end_symbol(None)
         .thumb_symbol("■");
     frame.render_stateful_widget(bar, area.inner(Margin::new(1, 0)), &mut state);
+}
+
+/// Scrollbar for a diff pane: thumb tracks the scroll line.
+pub fn diff_scrollbar(frame: &mut Frame, area: Rect, total_lines: usize, scroll: u16) {
+    let view = area.height.saturating_sub(2) as usize;
+    vscrollbar(frame, area, total_lines, scroll as usize, view);
+}
+
+/// Scrollbar for a list pane: thumb tracks the visible window (the list's
+/// `offset`). Call it right after rendering the list so the offset is current.
+pub fn list_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize) {
+    let view = area.height.saturating_sub(2) as usize;
+    vscrollbar(frame, area, total, offset, view);
+}
+
+/// Horizontal scrollbar along a diff pane's bottom border. `max_line` is the
+/// widest content line, `cell_w` the visible columns per side, `hscroll` the pan
+/// offset. Drawn only when the content is wider than one cell (else there's
+/// nothing to pan).
+pub fn diff_hscrollbar(frame: &mut Frame, area: Rect, max_line: usize, cell_w: u16, hscroll: u16) {
+    hscrollbar(frame, area, max_line, hscroll as usize, cell_w as usize);
 }
 
 // ── modal ───────────────────────────────────────────────────────────────────
@@ -436,8 +549,8 @@ fn printable(text: &str) -> String {
     out
 }
 
-/// A box over the whole screen with something the user has to read: a title, a
-/// body, and no way past it but dismissing it.
+/// A box over the panes with something the user has to read: a title, a body,
+/// and no way past it but dismissing it.
 ///
 /// It exists because the alternative is a line in a pane title, which is where
 /// a failed `git difftool` used to be reported and where nobody looked: the
@@ -447,10 +560,51 @@ fn printable(text: &str) -> String {
 pub struct Modal {
     title: String,
     body: String,
+    /// The help panel's styled rows, drawn in place of `body` when present.
+    help: Option<Vec<Line<'static>>>,
     scroll: u16,
     /// Yellow for an alert, cyan for a reader: the one thing that differs.
     colour: Color,
-    keys: &'static str,
+}
+
+/// One group of a help panel: a heading, then `(keys, what they do)` rows,
+/// where a row with no keys is a note about the group.
+pub type HelpSection = (&'static str, &'static [(&'static str, &'static str)]);
+
+/// The width of a help panel's key column, so every description starts in one
+/// place.
+const HELP_KEYS: usize = 16;
+
+fn help_lines(sections: &[HelpSection]) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for (section, entries) in sections {
+        if !lines.is_empty() {
+            lines.push(Line::raw(""));
+        }
+        lines.push(Line::styled(
+            *section,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for (keys, what) in *entries {
+            if keys.is_empty() {
+                lines.push(Line::styled(
+                    format!("  {what}"),
+                    Style::default().add_modifier(Modifier::DIM),
+                ));
+                continue;
+            }
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {keys:<HELP_KEYS$}"),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::raw(*what),
+            ]));
+        }
+    }
+    lines
 }
 
 impl Modal {
@@ -458,22 +612,33 @@ impl Modal {
         Modal {
             title: title.into(),
             body: printable(&body.into()),
+            help: None,
             scroll: 0,
             colour: Color::Yellow,
-            keys: "j/k ↑↓ scroll · esc dismiss",
+        }
+    }
+
+    /// The help panel: a reader of `sections`, titled `help`, which also pages
+    /// (`ctrl-d ctrl-u`), jumps to either end (`g G`) and closes on `?`.
+    pub fn help(sections: &[HelpSection]) -> Modal {
+        Modal {
+            help: Some(help_lines(sections)),
+            colour: Color::Cyan,
+            ..Modal::new("help", "")
         }
     }
 
     /// A reader: the same box in cyan, for something read by choice rather
-    /// than something that went wrong. `rows` is a key and what it does, one
-    /// per line, the keys in one column.
+    /// than something that went wrong. `rows` is a label and what goes with
+    /// it, one per line, the labels in one column. An empty label continues
+    /// the row above.
     pub fn reader(title: impl Into<String>, rows: &[(String, String)]) -> Modal {
         let width = rows
             .iter()
             .map(|(k, _)| k.chars().count())
             .max()
             .unwrap_or(0)
-            + 3;
+            + 2;
         let body = rows
             .iter()
             .map(|(key, does)| format!("{key:<width$}{does}"))
@@ -482,9 +647,9 @@ impl Modal {
         Modal {
             title: title.into(),
             body: printable(&body),
+            help: None,
             scroll: 0,
             colour: Color::Cyan,
-            keys: "j/k ↑↓ scroll · esc close",
         }
     }
 
@@ -501,7 +666,10 @@ impl Modal {
     /// dismissed, so the caller drops it. Movement keys scroll a body too long
     /// for the box; anything else is swallowed, so a stray keypress can't
     /// close a message before it is read.
-    pub fn on_key(&mut self, code: KeyCode) -> bool {
+    pub fn on_key(&mut self, code: KeyCode, ctrl: bool) -> bool {
+        if self.help.is_some() {
+            return self.help_key(code, ctrl);
+        }
         if is_down(code) {
             self.scroll = self.scroll.saturating_add(1);
         } else if is_up(code) {
@@ -512,34 +680,95 @@ impl Modal {
         false
     }
 
-    /// Draw it centered over whatever the view already rendered.
-    pub fn draw(&mut self, frame: &mut Frame) {
-        let full = frame.area();
-        let width = box_width(full.width);
+    /// `on_key` for the help panel. `draw` clamps the scroll, so `G` can ask
+    /// for more than there is.
+    fn help_key(&mut self, code: KeyCode, ctrl: bool) -> bool {
+        let half = 10;
+        match code {
+            KeyCode::Char('d') if ctrl => self.scroll = self.scroll.saturating_add(half),
+            KeyCode::Char('u') if ctrl => self.scroll = self.scroll.saturating_sub(half),
+            KeyCode::PageDown => self.scroll = self.scroll.saturating_add(half),
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(half),
+            KeyCode::Char('g') | KeyCode::Home => self.scroll = 0,
+            KeyCode::Char('G') | KeyCode::End => self.scroll = u16::MAX,
+            _ if is_down(code) => self.scroll = self.scroll.saturating_add(1),
+            _ if is_up(code) => self.scroll = self.scroll.saturating_sub(1),
+            _ if is_back(code) => return true,
+            KeyCode::Enter | KeyCode::Char('q' | ' ' | '?') => return true,
+            _ => {}
+        }
+        false
+    }
+
+    /// Draw it centered in `area`, the panes above the footer. A body taller
+    /// than the box scrolls under a key row that stays put, so the way out is
+    /// on screen however far it is scrolled.
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+        if let Some(lines) = &self.help {
+            let lines = lines.clone();
+            return self.draw_help(frame, area, lines);
+        }
+        let width = box_width(area.width);
         // Measured from the wrapped text, never its line count: counting
         // unwrapped lines is what clips the bottom off a long message.
         let body_h = wrapped_height(&self.body, box_inner_width(width)) as u16;
         // The body, a blank, the keys.
-        let area = popup_area(full, width, box_height(body_h + 2, full.height));
+        let rect = popup_area(area, width, box_height(body_h + 2, area.height));
 
-        // The viewport is what is left after the borders and the padding row.
-        let viewport = area.height.saturating_sub(BOX_CHROME_H);
-        self.scroll = clamp_scroll(self.scroll, body_h as usize, viewport);
+        let block = box_block(self.colour, &self.title);
+        let inner = block.inner(rect);
+        let [text_area, _, keys_area] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+        self.scroll = clamp_scroll(self.scroll, body_h as usize, text_area.height);
 
-        frame.render_widget(Clear, area); // wipe whatever's underneath
-        let mut lines: Vec<Line> = self
+        frame.render_widget(Clear, rect); // wipe whatever's underneath
+        frame.render_widget(block, rect);
+        let lines: Vec<Line> = self
             .body
             .lines()
             .map(|l| Line::raw(l.to_string()))
             .collect();
-        lines.push(Line::raw(""));
-        lines.push(box_hint(self.keys));
-
         let body = Paragraph::new(lines)
-            .block(box_block(self.colour, &self.title))
             .wrap(Wrap { trim: false })
             .scroll((self.scroll, 0));
-        frame.render_widget(body, area);
+        frame.render_widget(body, text_area);
+        frame.render_widget(Paragraph::new(box_hint(READER_KEYS)), keys_area);
+        vscrollbar(
+            frame,
+            rect,
+            body_h as usize,
+            self.scroll as usize,
+            text_area.height as usize,
+        );
+    }
+
+    /// The help panel's `draw`: its rows are never wrapped, and a scrollbar
+    /// runs down the right border once they are taller than the box.
+    fn draw_help(&mut self, frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
+        let width = box_width(area.width);
+        // The body, a blank, the keys.
+        let rect = popup_area(area, width, box_height(lines.len() as u16 + 2, area.height));
+        let block = box_block(self.colour, &self.title);
+        let inner = block.inner(rect);
+        let [text_area, _, keys_area] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+        self.scroll = clamp_scroll(self.scroll, lines.len(), text_area.height);
+
+        frame.render_widget(Clear, rect);
+        frame.render_widget(block, rect);
+        let shown = text_area.height as usize;
+        let total = lines.len();
+        frame.render_widget(Paragraph::new(lines).scroll((self.scroll, 0)), text_area);
+        frame.render_widget(Paragraph::new(box_hint(READER_KEYS)), keys_area);
+        vscrollbar(frame, rect, total, self.scroll as usize, shown);
     }
 }
 
@@ -605,9 +834,9 @@ pub fn box_block(colour: Color, title: &str) -> Block<'static> {
 /// `DarkGray` dimmed again. Separation is the blank row above it and its fixed
 /// place at the bottom, not brightness. Colouring it only made a guideline look
 /// like something worth reading.
-pub fn box_hint(keys: &str) -> Line<'static> {
+pub fn box_hint(keys: &[&str]) -> Line<'static> {
     Line::from(Span::styled(
-        keys.to_string(),
+        keys.join(SEP),
         Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
@@ -643,14 +872,14 @@ pub fn box_buttons(colour: Color, yes: bool) -> Line<'static> {
 /// the caller opens it with. `note` is what else to know before answering.
 pub fn confirm_popup(
     frame: &mut Frame,
+    area: Rect,
     colour: Color,
     title: &str,
     name: &str,
     note: Option<&str>,
     yes: bool,
 ) {
-    let full = frame.area();
-    let width = box_width(full.width);
+    let width = box_width(area.width);
     let mut lines = vec![Line::from(Span::styled(
         name.to_string(),
         Style::default()
@@ -666,33 +895,50 @@ pub fn confirm_popup(
     lines.push(Line::from(""));
     lines.push(box_buttons(colour, yes));
     lines.push(Line::from(""));
-    lines.push(box_hint(&format!("{X_MOVE} move · enter select · y/n")));
-    // Measured from the wrapped text: a long name or note wraps, and a box of
-    // fixed height would put the buttons past its own bottom border.
-    let inner = box_inner_width(width);
-    let rows: usize = lines.iter().map(|l| l.width().div_ceil(inner).max(1)).sum();
-    let area = popup_area(full, width, box_height(rows as u16, full.height));
+    lines.push(box_hint(GATE_KEYS));
+    draw_box(frame, area, width, lines, colour, title);
+}
 
-    frame.render_widget(Clear, area);
+/// Draw `lines` in a box `width` wide, centered in `area`, as tall as they are
+/// once wrapped: a long name or note wraps, and a box of fixed height would put
+/// the key row past its own bottom border.
+fn draw_box(
+    frame: &mut Frame,
+    area: Rect,
+    width: u16,
+    lines: Vec<Line<'static>>,
+    colour: Color,
+    title: &str,
+) {
+    let inner = box_inner_width(width);
+    let rows: usize = lines
+        .iter()
+        .map(|l| {
+            let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+            wrapped_rows(&text, inner)
+        })
+        .sum();
+    let rect = popup_area(area, width, box_height(rows as u16, area.height));
+    frame.render_widget(Clear, rect);
     let body = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .block(box_block(colour, title));
-    frame.render_widget(body, area);
+    frame.render_widget(body, rect);
 }
 
 /// The typed gate: red, no Yes/No, and nothing happens on Enter until `typed`
 /// is exactly `name`, which the box shows so it is copied rather than guessed.
-/// `verb` is what Enter does once the name matches (`delete`, `drop`).
+/// `verb` is what Enter does once the name matches (`del`, `drop`).
 pub fn typed_popup(
     frame: &mut Frame,
+    area: Rect,
     title: &str,
     note: Option<&str>,
     name: &str,
-    typed: &str,
+    typed: &Query,
     verb: &str,
 ) {
-    let full = frame.area();
-    let width = box_width(full.width);
+    let width = box_width(area.width);
     let mut lines: Vec<Line<'static>> = note
         .into_iter()
         .flat_map(str::lines)
@@ -710,9 +956,9 @@ pub fn typed_popup(
         Span::raw(" to confirm:"),
     ]));
     // Armed or not is shown on the thing Enter does, not only on the text: plain
-    // text and a dim `enter <verb>` until the name matches, then bold green
-    // text and `enter <verb>` filled red, the way a picked gate button is.
-    let armed = typed == name;
+    // text and a dim `↵ <verb>` until the name matches, then bold green text
+    // and `↵ <verb>` filled red, the way a picked gate button is.
+    let armed = typed.text == name;
     let field = if armed {
         Style::default()
             .fg(Color::Green)
@@ -720,48 +966,60 @@ pub fn typed_popup(
     } else {
         Style::default()
     };
-    lines.push(Line::from(Span::styled(format!("{typed}▏"), field)));
+    let (before, after) = typed.split();
+    lines.push(Line::from(Span::styled(format!("{before}▏{after}"), field)));
     lines.push(Line::from(""));
-    let label = format!(" enter {verb} ");
-    let enter = if armed {
-        Span::styled(
-            label,
+    let dim = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+    let enter = Span::styled(
+        format!("↵ {verb}"),
+        if armed {
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(
-            label,
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        )
-    };
-    let esc = Span::styled(
-        "  esc cancel",
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
+                .add_modifier(Modifier::BOLD)
+        } else {
+            dim
+        },
     );
-    lines.push(Line::from(vec![enter, esc]));
-    let inner = box_inner_width(width);
-    let rows: usize = lines.iter().map(|l| l.width().div_ceil(inner).max(1)).sum();
-    let area = popup_area(full, width, box_height(rows as u16, full.height));
-
-    frame.render_widget(Clear, area);
-    let body = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(box_block(Color::Red, title));
-    frame.render_widget(body, area);
+    lines.push(Line::from(vec![
+        enter,
+        Span::styled(format!("{SEP}{CANCEL}"), dim),
+    ]));
+    draw_box(frame, area, width, lines, Color::Red, title);
 }
 
-/// Rows `text` takes once wrapped to `width` columns.
+/// Rows `text` takes once word-wrapped to `width` columns, the way ratatui's
+/// `Wrap` breaks it: each line on its own, a word that does not fit starting a
+/// new row, and a word longer than the row breaking across several.
 pub fn wrapped_height(text: &str, width: usize) -> usize {
-    text.lines()
-        .map(|l| l.chars().count().div_ceil(width).max(1))
-        .sum()
+    text.lines().map(|l| wrapped_rows(l, width)).sum()
+}
+
+/// `wrapped_height` for one line with no breaks in it.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1usize;
+    let mut col = 0usize;
+    // Single spaces, not runs of whitespace: an indent is real columns.
+    for (i, word) in text.split(' ').enumerate() {
+        let w = word.chars().count();
+        let need = if i == 0 { w } else { col + 1 + w };
+        if need <= width {
+            col = need;
+        } else {
+            rows += 1;
+            col = w;
+        }
+        while col > width {
+            rows += 1;
+            col -= width;
+        }
+    }
+    rows
 }
 
 /// A box of at most `w`×`h`, centered in `area`.
@@ -811,7 +1069,7 @@ mod tests {
 
     #[test]
     fn a_filter_keeps_only_rows_every_term_is_in() {
-        // `/` and `?` split on whitespace and require all of them, which is what
+        // `/` and `ctrl-f` split on whitespace and require all of them, which is what
         // lets `pablo fix` mean both words rather than either.
         assert!(
             query("").keeps("anything at all"),
