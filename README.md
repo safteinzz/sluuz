@@ -45,9 +45,8 @@ slu repos --dirty        # only the ones needing attention
 
 ![slu repos listing six repositories and their state, then only the dirty ones](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos-plain.png)
 
-One app, five doors: `slu ibranch` opens it at the branches level, `slu itag`
-at the tags level, `slu ilog` at the commits level and `slu istash` at the
-stashes of the repo you are standing in.
+The same app opens at the branches, tags, commits or stashes of the repo you
+are in with `slu ibranch`, `slu itag`, `slu ilog` and `slu istash`.
 
 ## Find a leaked string in every repo's history
 
@@ -63,12 +62,8 @@ slu scan -t "AKIA,BEGIN RSA PRIVATE KEY"
 ![slu scan's report over six repositories, ending in a summary of seven hits](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/sleuth-plain.png)
 
 `notifications-worker` is the case a file listing cannot find: `.env` was
-untracked afterwards, so the secret survives only in history. The `origin/` refs
-say it survives on the server too.
-
-Terms are case-insensitive and default to
-`password,secret,token,api_key,passwd,credentials`; `-t` replaces that list.
-Being pickaxe-based, all three also read binary and encrypted blobs.
+untracked afterwards, so the secret survives only in history, and the `origin/`
+refs say it survives on the server too.
 
 ## Read history in a real diff view
 
@@ -85,15 +80,14 @@ slu trace [-a] [-g] [-n N]   # the aligned log, printed; every branch, with a gr
 
 ![slu trace -a listing every branch's history in aligned columns](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history-plain.png)
 
-Highlighted in pure Rust, so no external diff tool is required - though `Enter`
+Highlighted in pure Rust, so no external diff tool is needed, though `Enter`
 hands the file to yours if you want it.
 
 ## Stage and review in one place
 
 ![slu istatus staging and unstaging a file with its diff below, and switching between its tabs](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status.gif)
 
-Legend: left column staged (green) · right column unstaged (red) · `MM` both ·
-`??` untracked
+Legend: left column staged (green) · right column unstaged (red) · `MM` both · `??` untracked
 
 ```bash
 slu istatus              # the two columns, with the diffs
@@ -102,12 +96,9 @@ slu status -sb           # real git, passed straight through
 
 ![slu status -sb and slu log as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status-plain.png)
 
-`git status` you can act on, in git's own two-column code. `s` stages the file
-under the cursor, `u` unstages it and `space` flips it; `S` and `U` do the same
-to every file the list shows, filter included. `d` throws away every change to
-the file, or the file itself when git has no copy of it, once you type its
-name. The diff pane shows the side the tab you are on is about. Works from any
-subdirectory.
+`git status` you can act on, in git's own two-column code: `s` stages, `u`
+unstages, and `S` and `U` do it to every file the list shows. `d` throws a
+file's changes away once you type its name.
 
 ## See what a stash holds
 
@@ -120,19 +111,15 @@ slu stash list           # real git, passed straight through
 
 ![slu stash list and slu stash show as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/stash-plain.png)
 
-No more `git stash show -p stash@{2}` to find out what you parked. The diff is
-the stash against the commit it was made on, which is what `git stash show -p`
-prints. `a` applies the stash under the cursor, `p` pops it (applies it, then
-drops it) and `d` drops it, which asks for its name first, since its changes
-are kept nowhere else. A pop that conflicts keeps the stash, as git always does.
-Untracked files stashed with `-u` are not listed.
+No more `git stash show -p stash@{2}` to find out what you parked. `a` applies,
+`p` pops and `d` drops, asking for the stash's name first, since its changes are
+kept nowhere else.
 
 ## Know what you have not pushed, and delete what is finished
 
 ![slu ibranch listing branches with their push state across its tabs, filtering them, asking for an unpushed branch's name before it would delete it, then deleting a finished one](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
 
-Legend: `↑N` ahead of upstream · `no remote` never pushed · `⚑ gone` upstream
-was deleted · `synced` in step
+Legend: `↑N` ahead of upstream · `no remote` never pushed · `⚑ gone` upstream was deleted · `synced` in step
 
 ```bash
 slu ibranch [-r|-g]      # push state of your branches; `d` deletes, `s` syncs, `S` also pulls
@@ -144,21 +131,14 @@ slu tidy -p              # the same, after dropping remote branches that are gon
 ![slu tidy -a reporting the finished branches across six repositories](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches-plain.png)
 
 "Finished" means **upstream gone**, not "merged", so a branch still alive on the
-remote is never suggested for deletion. A gone branch is only offered once its
-changes are on the remote's main line, however they got there; one holding work
-the remote does not have is listed apart and left for you to look at.
-
-Git only marks a branch gone once the remote-tracking ref is really absent, and
-a plain `git fetch` never removes one - so on a repo that does not prune, `tidy`
-can be missing branches and says so. `tidy -p`, or `s` in `ibranch`, prunes
-first; `git config --global fetch.prune true` fixes it for good.
+remote is never suggested, and one holding work the remote does not have is
+listed apart for you to look at.
 
 ## Know which tags the remote has
 
 ![slu itag marking three tags against the remote, asking for a pushed one's name before it would delete it everywhere, opening another's commits and a diff, and deleting that one](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/tags.gif)
 
-Legend: `↑` not pushed · `⚑` the remote's tag is not the same as yours · `↓` only
-the remote has it
+Legend: `↑` not pushed · `⚑` the remote's tag is not the same as yours · `↓` only the remote has it
 
 ```bash
 slu itag                 # every tag against the remote, and what went into each
@@ -167,18 +147,9 @@ slu tag -n               # real git, passed straight through
 
 ![slu tag -n as git prints it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/tags-plain.png)
 
-git keeps no record of which tags a remote has, so `slu itag` asks it with `git
-ls-remote` once the list is up, and never stops to prompt for a password: a
-remote that wants one reads as unreachable. Below each tag are the commits since
-the tag before it on the same line of history, which is what went into that
-release.
-
-Branches do not have that wait because every clone has git keep a copy of the
-remote's branches (`origin/main`). `t` offers the same for tags: one fetch rule
-in this repo's `.git/config`, after which git keeps a copy of the remote's tags
-on every fetch and push, and `slu itag` shows the marks at once while it checks
-for anything newer. The copy lives in `refs/remote-tags/`, outside
-`refs/remotes/`, so tags never show up as remote branches.
+git keeps no record of a remote's tags, so `slu itag` asks the remote once the
+list is up and never stops for a password. `t` adds one fetch rule so git keeps
+a copy of them, and the marks then show at once.
 
 ## Commands
 
@@ -187,24 +158,12 @@ slu sync [path] [--pull]       # fetch and prune every repo, optionally fast-for
 slu each <git args>            # run any git command in every repo, in parallel
 ```
 
-Multi-repo commands take a `path` (default `.`) and `-d, --depth <N>` (default
-3), and `slu <command> --help` lists any command's full flags.
+Multi-repo commands take a `path` (default `.`) and `-d N` (default 3),
+`slu <command> --help` has every flag, and `?` in any screen lists every key.
 
-## Keys
-
-| key | does |
-| --- | --- |
-| `j` `k` / `↑` `↓` | move, faster the longer you hold it; with `ctrl`, move the pane below or scroll a diff |
-| `h` `l` / `←` `→` | switch tab; with `ctrl`, pan a diff sideways |
-| `/` | filter the top pane, every space-separated term has to match; `↵` keeps it, `esc` drops it |
-| `ctrl-f` | the same for the pane below |
-| `↵` | open what is under the cursor |
-| `esc` | step back out; cancel a question, close help or an alert |
-| `r` | read it again from git, keeping the cursor on what it was on |
-| `?` | every key, on every screen |
-| `q` / `ctrl-c` | quit; in a box or a filter, `ctrl-c` is `esc` |
-
-Each screen's own keys are on its bottom row, and `?` lists them all.
+Every interactive tool has a plain command that prints the same answer for
+scripts and pipes, and anything passed through keeps git's own output and exit
+code.
 
 ## Tab completion
 
@@ -219,6 +178,19 @@ slu completions fish --add     # ~/.config/fish/config.fish
 
 Restart your shell afterwards; without `--add` it just prints the script. Works
 in Git Bash and WSL too.
+
+## What it edits
+
+```
+.git/config          one fetch rule for the remote's tags, when you press t in slu itag
+refs/remote-tags/    git's copy of the remote's tags, kept apart from branches
+```
+
+## Notes
+
+- `scan` terms are case-insensitive and default to `password,secret,token,api_key,passwd,credentials`, and being pickaxe-based they also read binary and encrypted blobs.
+- Git marks a branch gone only once its remote-tracking ref is pruned, so on a repo that never prunes `tidy` can miss branches and says so; `tidy -p` or `s` in `ibranch` prunes first, and `git config --global fetch.prune true` fixes it for good.
+- A stash's diff is against the commit it was made on, as `git stash show -p` prints it, and untracked files stashed with `-u` are not listed.
 
 ## Compatibility
 
