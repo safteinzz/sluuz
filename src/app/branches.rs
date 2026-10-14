@@ -99,12 +99,8 @@ impl App {
         // batch after a refresh always does, since the list was empty a moment
         // ago - and the commits pane has to follow it.
         let before = self.bsel.idx();
-        let scope = SCOPES[self.bsel.scope];
-        let query = &self.bsel.query;
         let more: Vec<usize> = (from..self.branches.len())
-            .filter(|&i| {
-                scope.keeps(&self.branches[i]) && query.keeps(&haystack(&self.branches[i]))
-            })
+            .filter(|&i| self.shows(&self.branches[i]))
             .collect();
         self.bsel.append(more);
         if let Some(want) = self.bsel.restore.clone()
@@ -125,14 +121,24 @@ impl App {
     }
 
     pub(super) fn rescope_branches(&mut self) {
-        let scope = SCOPES[self.bsel.scope];
-        let query = &self.bsel.query;
         let visible = (0..self.branches.len())
-            .filter(|&i| {
-                scope.keeps(&self.branches[i]) && query.keeps(&haystack(&self.branches[i]))
-            })
+            .filter(|&i| self.shows(&self.branches[i]))
             .collect();
         self.bsel.show(visible);
+    }
+
+    /// Whether the branch list keeps `b`: its tab's, or under `iremote` the
+    /// remote's, and the filter's.
+    fn shows(&self, b: &Branch) -> bool {
+        let kept = if self.remote_branches() {
+            b.remote
+                && b.name
+                    .strip_prefix(self.branch_remote.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        } else {
+            SCOPES[self.bsel.scope].keeps(b)
+        };
+        kept && self.bsel.query.keeps(&haystack(b))
     }
 
     /// Load the selected branch's commits, which the pane below the branch list

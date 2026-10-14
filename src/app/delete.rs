@@ -74,6 +74,11 @@ pub(super) enum Target {
     },
     /// `t`: add the fetch rule that has git keep a copy of this remote's tags.
     Track(String),
+    /// A remote this clone forgets, with the tracking refs it fetched.
+    Remote {
+        name: String,
+        url: String,
+    },
     /// A stash, named `stash@{n}`, whose changes exist nowhere else. `hash` is
     /// the stash the name meant when the box opened, which is the one that goes.
     Stash {
@@ -90,7 +95,7 @@ impl Target {
         match self {
             Target::Branch { lost, landed, .. } => *lost > 0 && !landed,
             Target::RemoteTag { .. } | Target::RemoteBranch { .. } | Target::Stash { .. } => true,
-            Target::Tag { .. } | Target::Track(_) => false,
+            Target::Tag { .. } | Target::Track(_) | Target::Remote { .. } => false,
         }
     }
 
@@ -112,6 +117,7 @@ impl Target {
             Target::RemoteTag { remote, name, .. } => format!("delete {name} on {remote}?"),
             Target::RemoteBranch { remote, branch } => format!("delete {branch} on {remote}?"),
             Target::Track(_) => "show push marks instantly?".to_string(),
+            Target::Remote { .. } => "remove this remote?".to_string(),
             Target::Stash { name, .. } => format!("drop {name}?"),
         }
     }
@@ -122,7 +128,8 @@ impl Target {
             Target::Branch { name, .. }
             | Target::Tag { name, .. }
             | Target::RemoteTag { name, .. }
-            | Target::Stash { name, .. } => name.clone(),
+            | Target::Stash { name, .. }
+            | Target::Remote { name, .. } => name.clone(),
             Target::RemoteBranch { branch, .. } => branch.clone(),
             Target::Track(remote) => {
                 format!("git keeps a copy of {remote}'s tags, like it does its branches")
@@ -166,6 +173,9 @@ impl Target {
             )),
             Target::Stash { subject, .. } => Some(format!(
                 "{subject}\nits changes are kept nowhere else, so they go with it"
+            )),
+            Target::Remote { url, .. } => Some(format!(
+                "only this clone forgets it, with its tracking refs; nothing on {url} is touched\nbranches that track it stop tracking anything"
             )),
         }
     }
@@ -312,6 +322,7 @@ impl App {
             }
             Target::Branch { .. } | Target::Tag { .. } => self.delete_here(target),
             Target::Stash { name, hash, .. } => self.drop_stash(&name, &hash),
+            Target::Remote { .. } => self.delete_remote(&target),
         }
     }
 
@@ -450,7 +461,7 @@ impl App {
                 self.load_tags();
                 self.mark_tags();
             }
-            Target::Track(_) | Target::Stash { .. } => {}
+            Target::Track(_) | Target::Stash { .. } | Target::Remote { .. } => {}
         }
         self.pending = true;
     }

@@ -22,10 +22,10 @@ IMAGE=localhost/sluuz-render
 if [ $# -gt 0 ]; then
   TAPES=("$1")
 else
-  # plain goes first and stash, tags and branches last: those are the only
-  # tapes that change the world they run in, because they drop a stash and
-  # delete a tag and a branch, and the stills should show it untouched.
-  TAPES=(plain sleuth repos history status stash tags branches)
+  # plain goes first and stash, tags, branches and remote last: those are the
+  # only tapes that change the world they run in, because they drop a stash,
+  # delete a tag and a branch and push, and the stills should show it untouched.
+  TAPES=(plain sleuth repos history status stash tags branches remote)
 fi
 
 (cd .. && cargo build --release)

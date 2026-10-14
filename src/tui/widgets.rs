@@ -118,6 +118,8 @@ pub const NOTE: Duration = Duration::from_secs(3);
 
 // The words every footer and key row is built from, so the same key reads the
 // same on every screen and a hand-typed legend stands out.
+pub const CREATE: &str = "c create";
+pub const EDIT: &str = "e edit";
 pub const DEL: &str = "d del";
 pub const FIND: &str = "/ find";
 pub const REFRESH: &str = "r refresh";
@@ -988,6 +990,160 @@ pub fn typed_popup(
         Span::styled(format!("{SEP}{CANCEL}"), dim),
     ]));
     draw_box(frame, area, width, lines, Color::Red, title);
+}
+
+// ── form ────────────────────────────────────────────────────────────────────
+
+/// One typed field of a form.
+pub struct Field {
+    /// A short noun, which the form follows with its colon.
+    pub label: &'static str,
+    pub value: Query,
+    /// Submitting refuses a blank, and the label wears a red `*` for it.
+    pub required: bool,
+    /// What the field takes, dim in the value column until something is typed.
+    pub placeholder: &'static str,
+}
+
+impl Field {
+    pub fn new(label: &'static str, placeholder: &'static str, required: bool) -> Field {
+        Field {
+            label,
+            value: Query::default(),
+            required,
+            placeholder,
+        }
+    }
+
+    /// The same field holding `text`, caret at its end.
+    pub fn with(mut self, text: &str) -> Field {
+        self.value.text = text.to_string();
+        self.value.caret = text.chars().count();
+        self
+    }
+}
+
+/// What a key did to an open form.
+pub enum FormKey {
+    Open,
+    Cancel,
+    Submit,
+}
+
+/// A cyan box of typed fields: labels in one column, values in the next. Enter
+/// moves to the next field and submits on the last, `tab`/`ctrl-j` and
+/// `shift-tab`/`ctrl-k` move between fields, and every field edits like a shell
+/// line through `Query::on_key`.
+pub struct Form {
+    pub title: String,
+    pub fields: Vec<Field>,
+    pub at: usize,
+}
+
+/// Where a form's values start, and the furthest a long label may push them.
+const FORM_VALUES: usize = 14;
+const FORM_VALUES_MAX: usize = 22;
+
+impl Form {
+    pub fn new(title: impl Into<String>, fields: Vec<Field>) -> Form {
+        Form {
+            title: title.into(),
+            fields,
+            at: 0,
+        }
+    }
+
+    /// A field's value with the spaces around it dropped.
+    pub fn value(&self, i: usize) -> &str {
+        self.fields.get(i).map_or("", |f| f.value.text.trim())
+    }
+
+    /// `code` is the key after the caller's own folding (Ctrl-C and `ctrl-[`
+    /// as Esc); `key` is what a field is typed with.
+    pub fn on_key(&mut self, code: KeyCode, key: KeyEvent) -> FormKey {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let last = self.fields.len().saturating_sub(1);
+        match code {
+            KeyCode::Esc => return FormKey::Cancel,
+            KeyCode::Enter => {
+                // A blank the submit would refuse is where the cursor goes,
+                // rather than past it.
+                let blank = self
+                    .fields
+                    .iter()
+                    .position(|f| f.required && f.value.text.trim().is_empty());
+                match blank {
+                    Some(i) if i <= self.at || self.at == last => self.at = i,
+                    _ if self.at < last => self.at += 1,
+                    _ => return FormKey::Submit,
+                }
+            }
+            KeyCode::Tab => self.at = if self.at == last { 0 } else { self.at + 1 },
+            KeyCode::BackTab => self.at = if self.at == 0 { last } else { self.at - 1 },
+            KeyCode::Down => self.at = (self.at + 1).min(last),
+            KeyCode::Up => self.at = self.at.saturating_sub(1),
+            KeyCode::Char('j') if ctrl => self.at = (self.at + 1).min(last),
+            KeyCode::Char('k') if ctrl => self.at = self.at.saturating_sub(1),
+            _ => {
+                if let Some(field) = self.fields.get_mut(self.at) {
+                    field.value.on_key(key);
+                }
+            }
+        }
+        FormKey::Open
+    }
+
+    /// Draw it centered in `area`, as tall as its fields once wrapped.
+    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+        let width = box_width(area.width);
+        let longest = self
+            .fields
+            .iter()
+            .map(|f| f.label.chars().count() + 3)
+            .max()
+            .unwrap_or(0);
+        let col = longest.clamp(FORM_VALUES, FORM_VALUES_MAX);
+        let dim = Style::default().add_modifier(Modifier::DIM);
+        let mut lines = Vec::new();
+        for (i, f) in self.fields.iter().enumerate() {
+            let focused = i == self.at;
+            let label = if focused { Style::default() } else { dim };
+            let mut spans = vec![Span::styled(f.label.to_string(), label)];
+            let mut used = f.label.chars().count() + 1;
+            if f.required {
+                spans.push(Span::styled("*", Style::default().fg(Color::Red)));
+                used += 1;
+            }
+            spans.push(Span::styled(":", label));
+            spans.push(Span::raw(" ".repeat(col.saturating_sub(used).max(1))));
+            let placeholder = Span::styled(
+                f.placeholder.to_string(),
+                Style::default().fg(Color::DarkGray),
+            );
+            match (focused, f.value.text.is_empty()) {
+                (true, true) => spans.extend([Span::raw("▏"), placeholder]),
+                (true, false) => {
+                    let (before, after) = f.value.split();
+                    spans.push(Span::raw(format!("{before}▏{after}")));
+                }
+                (false, true) => spans.push(placeholder),
+                (false, false) => spans.push(Span::styled(f.value.text.clone(), dim)),
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(Line::from(""));
+        let enter = if self.at + 1 == self.fields.len() {
+            "↵ submit"
+        } else {
+            "↵ next"
+        };
+        let mut keys = vec![enter, CANCEL];
+        if self.fields.iter().any(|f| f.required) {
+            keys.push("* required");
+        }
+        lines.push(box_hint(&keys));
+        draw_box(frame, area, width, lines, Color::Cyan, &self.title);
+    }
 }
 
 /// Rows `text` takes once word-wrapped to `width` columns, the way ratatui's

@@ -151,6 +151,22 @@ git keeps no record of a remote's tags, so `slu itag` asks the remote once the
 list is up and never stops for a password. `t` adds one fetch rule so git keeps
 a copy of them, and the marks then show at once.
 
+## See where every remote stands
+
+![slu iremote measuring a fork's main against origin and upstream, pushing it to origin, opening upstream's branches and their commits, then adding a remote through a form and removing it behind a gate](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/remote.gif)
+
+Legend: `↑N` commits that remote lacks · `↓N` commits only it has · `·` no local branch tracks it
+
+```bash
+slu iremote              # every remote against this branch; `p` pushes, `s` syncs, `S` also pulls
+slu branch -vv           # real git, passed straight through
+```
+
+![slu remote and slu branch -vv as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/remote-plain.png)
+
+`p` never forces and sets an upstream only on a branch that has none, so pushing
+a fork's work to `upstream` never changes where it pulls from.
+
 ## Commands
 
 ```bash

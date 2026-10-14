@@ -8,9 +8,9 @@ Output "../readme-assets/repos.gif"
 Set Shell bash
 Set FontFamily "JetBrainsMono NF"
 Set Theme "Catppuccin Mocha"
-Set FontSize 14
-Set Width 960
-Set Height 600
+Set FontSize 15
+Set Width 1056
+Set Height 664
 Set Padding 20
 Set Framerate 20
 Set TypingSpeed 55ms

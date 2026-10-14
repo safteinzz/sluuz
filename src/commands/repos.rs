@@ -37,7 +37,7 @@ pub fn run(args: Args) {
         .collect();
 
     if shown.is_empty() {
-        println!("{}", "All repos clean and in sync.".green());
+        outln!("{}", "All repos clean and in sync.".green());
         return;
     }
 
@@ -59,11 +59,11 @@ pub fn run(args: Args) {
 
         let name = format!("{:name_w$}", s.name);
         let branch = format!("{:branch_w$}", s.branch);
-        println!("  {}  {}  {}", name.bold(), branch.cyan(), state(s));
+        outln!("  {}  {}  {}", name.bold(), branch.cyan(), state(s));
     }
 
-    println!();
-    println!(
+    outln!();
+    outln!(
         "{}",
         format!(
             "{} repos · {} dirty · {} with unpushed commits",

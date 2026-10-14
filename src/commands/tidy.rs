@@ -86,7 +86,7 @@ pub fn run(args: Args) {
 
         if gone.is_empty() {
             if args.all {
-                println!(
+                outln!(
                     "{} {}",
                     format!("📁 {}", name).bold(),
                     "nothing to clean up".dimmed()
@@ -100,7 +100,7 @@ pub fn run(args: Args) {
         total_branches += safe.len();
         total_holding += holding.len();
 
-        println!(
+        outln!(
             "{}  {}",
             format!("📁 {}", name).bold(),
             format!("(on {})", current).dimmed()
@@ -108,7 +108,7 @@ pub fn run(args: Args) {
         let width = gone.iter().map(|b| b.name.len()).max().unwrap_or(0);
         let list = |branches: &[&Branch]| {
             for b in branches {
-                println!(
+                outln!(
                     "     {}  {}",
                     format!("{:width$}", b.name).yellow(),
                     b.age.dimmed()
@@ -116,7 +116,7 @@ pub fn run(args: Args) {
             }
         };
         if !safe.is_empty() {
-            println!(
+            outln!(
                 "   {}",
                 "upstream gone, changes already on the remote - safe to delete:".dimmed()
             );
@@ -128,26 +128,26 @@ pub fn run(args: Args) {
                 .join(" ");
             // `-D`: their changes were just shown to be on the remote, and `-d`
             // refuses any branch that reached it by squash or rebase.
-            println!("   {} git branch -D {}", "↳".dimmed(), names.dimmed());
+            outln!("   {} git branch -D {}", "↳".dimmed(), names.dimmed());
         }
         if !holding.is_empty() {
-            println!(
+            outln!(
                 "   {}",
                 "upstream gone, but holding changes the remote does not have - left alone:"
                     .dimmed()
             );
             list(&holding);
-            println!(
+            outln!(
                 "   {} {}",
                 "↳".dimmed(),
                 "look before deleting: slu ibranch -g".dimmed()
             );
         }
-        println!();
+        outln!();
     }
 
     if total_branches == 0 && total_holding == 0 {
-        println!(
+        outln!(
             "{}",
             "No branches with a gone upstream to clean up.".green()
         );
@@ -161,14 +161,14 @@ pub fn run(args: Args) {
                 " · {total_holding} hold changes the remote does not have"
             ));
         }
-        println!("{}", summary.dimmed());
+        outln!("{}", summary.dimmed());
     }
 
     // Said out loud rather than assumed: git only marks a branch `[gone]` once
     // the remote-tracking ref is really absent, and a plain `git fetch` never
     // removes one. Without pruning, "nothing to clean up" is not an answer.
     if stale_possible {
-        println!(
+        outln!(
             "{}",
             "refs are only as fresh as your last prune - run `slu tidy --prune`, or `git config --global fetch.prune true`"
                 .dimmed()

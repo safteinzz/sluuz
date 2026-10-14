@@ -39,10 +39,10 @@ pub fn run(args: Args) {
         .filter(|s| !s.is_empty())
         .collect();
 
-    println!("\n{}", "REPO SCANNER".bold());
-    println!("{}", format!("base  : {}", args.path.display()).dimmed());
-    println!("{}", format!("terms : {}", terms.join(", ")).dimmed());
-    println!("{}\n", "━".repeat(56));
+    outln!("\n{}", "REPO SCANNER".bold());
+    outln!("{}", format!("base  : {}", args.path.display()).dimmed());
+    outln!("{}", format!("terms : {}", terms.join(", ")).dimmed());
+    outln!("{}\n", "━".repeat(56));
 
     let repos = repos_or_exit(&args.path, args.depth);
 
@@ -54,7 +54,7 @@ pub fn run(args: Args) {
         total_repos += 1;
 
         let name = display_name(repo);
-        println!(
+        outln!(
             "{} {}",
             format!("📁 {}", name).bold(),
             repo.display().to_string().dimmed()
@@ -63,7 +63,7 @@ pub fn run(args: Args) {
         let repo_str = match repo.to_str() {
             Some(s) => s,
             None => {
-                println!("   {}\n", "✓ no matches".green());
+                outln!("   {}\n", "✓ no matches".green());
                 continue;
             }
         };
@@ -71,41 +71,41 @@ pub fn run(args: Args) {
         let commits = history::pickaxe(repo_str, &terms, true);
 
         if commits.is_empty() {
-            println!("   {}\n", "✓ no matches".green());
+            outln!("   {}\n", "✓ no matches".green());
             continue;
         }
 
         let hits = count_hits(&commits);
         repos_with_hits += 1;
         total_hits += hits;
-        println!("   {}\n", format!("⚠  {} hit(s)", hits).red().bold());
+        outln!("   {}\n", format!("⚠  {} hit(s)", hits).red().bold());
 
         for commit in &commits {
             let branches = history::branches_for(repo_str, &commit.full);
 
-            println!(
+            outln!(
                 "   {}  {}  {}",
                 commit.date.dimmed(),
                 commit.short.cyan().bold(),
                 commit.subject
             );
             if !branches.is_empty() {
-                println!("   {} {}", "branch │".magenta(), branches.join("  "));
+                outln!("   {} {}", "branch │".magenta(), branches.join("  "));
             }
             for file in &commit.files {
-                println!("   {} {}", "file   │".dimmed(), file.path);
+                outln!("   {} {}", "file   │".dimmed(), file.path);
                 if file.lines.is_empty() {
-                    println!(
+                    outln!(
                         "   {} {}",
                         "hit    │".yellow(),
                         "(binary or no visible diff)".dimmed()
                     );
                 }
                 for (_is_addition, line) in &file.lines {
-                    println!("   {} {}", "hit    │".yellow(), line.trim());
+                    outln!("   {} {}", "hit    │".yellow(), line.trim());
                 }
             }
-            println!();
+            outln!();
         }
     }
 
@@ -123,32 +123,32 @@ fn count_hits(commits: &[CommitMatch]) -> usize {
 }
 
 fn print_summary(total_repos: usize, repos_with_hits: usize, total_hits: usize) {
-    println!("{}", "━".repeat(56));
-    println!("{}", "SUMMARY".bold());
-    println!("  repos scanned   : {}", total_repos.to_string().bold());
+    outln!("{}", "━".repeat(56));
+    outln!("{}", "SUMMARY".bold());
+    outln!("  repos scanned   : {}", total_repos.to_string().bold());
 
     if repos_with_hits > 0 {
-        println!(
+        outln!(
             "  repos with hits : {}",
             repos_with_hits.to_string().red().bold()
         );
-        println!(
+        outln!(
             "  total hits      : {}",
             total_hits.to_string().red().bold()
         );
-        println!("\n  {}", "to remove a secret from history:".dimmed());
-        println!(
+        outln!("\n  {}", "to remove a secret from history:".dimmed());
+        outln!(
             "  {}",
             "  recent, top of one branch : git reset --hard <hash>^ && git push --force".dimmed()
         );
-        println!(
+        outln!(
             "  {}",
             "  deep or on many branches  : git filter-repo --replace-text  (rewrites all history)"
                 .dimmed()
         );
     } else {
-        println!("  {}", "✓ all clean".green().bold());
+        outln!("  {}", "✓ all clean".green().bold());
     }
 
-    println!();
+    outln!();
 }

@@ -41,7 +41,7 @@ struct Outcome {
 pub fn run(args: Args) {
     let repos = repos_or_exit(&args.path, args.depth);
 
-    println!(
+    outln!(
         "{} {} repo(s)…\n",
         if args.pull {
             "Fetching + pulling"
@@ -75,15 +75,15 @@ pub fn run(args: Args) {
                 "✗".red()
             }
         };
-        println!("  {}  {:name_w$}  {}", mark, o.name.bold(), o.note.dimmed());
+        outln!("  {}  {:name_w$}  {}", mark, o.name.bold(), o.note.dimmed());
     }
 
-    println!();
+    outln!();
     let summary = format!("{} repos · {} failed", outcomes.len(), failed);
     if failed > 0 {
-        println!("{}", summary.red());
+        outln!("{}", summary.red());
     } else {
-        println!("{}", summary.dimmed());
+        outln!("{}", summary.dimmed());
     }
 }
 

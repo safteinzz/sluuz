@@ -43,11 +43,11 @@ pub fn run(cmd: Cmd) {
 
 fn update(args: UpdateArgs) {
     if !args.yes && !confirm() {
-        println!("{}", "Aborted.".dimmed());
+        outln!("{}", "Aborted.".dimmed());
         return;
     }
 
-    println!(
+    outln!(
         "{} {}\n",
         "Updating sluuz via".dimmed(),
         "cargo install sluuz --force".bold()
@@ -64,7 +64,7 @@ fn update(args: UpdateArgs) {
         .status()
     {
         Ok(status) if status.success() => {
-            println!("\n{}", "✓ sluuz is up to date.".green());
+            outln!("\n{}", "✓ sluuz is up to date.".green());
         }
         Ok(status) => {
             #[cfg(windows)]
@@ -99,15 +99,15 @@ fn check() {
     let current = env!("CARGO_PKG_VERSION");
     match latest() {
         Ok(latest) if newer(&latest, current) => {
-            println!(
+            outln!(
                 "{} {} {}",
                 format!("sluuz {latest}").bold(),
                 "is available, you have".dimmed(),
                 current.bold()
             );
-            println!("{} {}", "run".dimmed(), "slu self update".bold());
+            outln!("{} {}", "run".dimmed(), "slu self update".bold());
         }
-        Ok(_) => println!(
+        Ok(_) => outln!(
             "{} {}",
             format!("sluuz {current}").bold(),
             "is the latest release.".dimmed()
@@ -151,7 +151,7 @@ fn newer(a: &str, b: &str) -> bool {
 
 /// Ask the user to confirm. Defaults to No, so a bare Enter cancels.
 fn confirm() -> bool {
-    print!(
+    out!(
         "{} {} ",
         "Update sluuz to the latest release via cargo?".bold(),
         "[y/N]".dimmed()

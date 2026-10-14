@@ -16,6 +16,7 @@ impl App {
     pub(super) fn inspect(&mut self) {
         let found = match self.level {
             Level::Repos => self.inspect_repo(),
+            Level::Remotes => self.inspect_remote(),
             Level::Branches => self.inspect_branch(),
             Level::Tags => self.inspect_tag(),
             Level::Commits | Level::Diff => self.inspect_commit(),
@@ -56,6 +57,41 @@ impl App {
         }
         rows.extend(remotes);
         Some((format!("repo {}", r.name), rows, String::new()))
+    }
+
+    fn inspect_remote(&self) -> Option<(String, Rows, String)> {
+        let r = self.remote()?;
+        let mut rows = vec![row("fetch", r.url.as_str())];
+        if r.push_url != r.url {
+            rows.push(row("push", r.push_url.as_str()));
+        }
+        if let Some(d) = load::default_branch(&self.repo, &r.name) {
+            rows.push(row("default", d));
+        }
+        let prefix = format!("{}/", r.name);
+        let held = self
+            .branches
+            .iter()
+            .filter(|b| b.remote && b.name.starts_with(&prefix))
+            .count();
+        rows.push(row("branches", branches(held)));
+        rows.push(row(
+            "tracked by",
+            format!("{} here", branches(self.tracking(&r.name))),
+        ));
+        if let Some(head) = &self.head {
+            let state = match r.ahead_behind {
+                None => format!("{} has no {head}", r.name),
+                Some((0, 0)) => "in sync".to_string(),
+                Some((a, b)) => format!(
+                    "{} to push, {} to pull",
+                    count(a, "commit"),
+                    count(b, "commit")
+                ),
+            };
+            rows.push(row(head, state));
+        }
+        Some((format!("remote {}", r.name), rows, String::new()))
     }
 
     fn inspect_branch(&self) -> Option<(String, Rows, String)> {
@@ -178,6 +214,15 @@ fn push_state(b: &Branch) -> String {
     match b.status().as_str() {
         "synced" => format!("{}, in sync", b.upstream),
         state => format!("{}, {state}", b.upstream),
+    }
+}
+
+/// `1 branch`, `3 branches`.
+fn branches(n: usize) -> String {
+    if n == 1 {
+        "1 branch".to_string()
+    } else {
+        format!("{n} branches")
     }
 }
 

@@ -4,12 +4,12 @@
 
 use super::{App, Level, Pane, Sel, branches, commits, repos, tags};
 use crate::git::RepoStatus;
-use crate::git::load::{RemoteTags, Tag, TagState};
+use crate::git::load::{Remote, RemoteTags, Tag, TagState};
 use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE};
 use crate::tui::widgets::{
-    DEL, FILTER_KEYS, FIND, HELP, HelpSection, Modal, QUIT, REFRESH, commit_item, confirm_popup,
-    diff_hscrollbar, diff_scrollbar, file_item, key_footer, list_scrollbar, pane_block, scope_tabs,
-    typed_popup,
+    CREATE, DEL, EDIT, FILTER_KEYS, FIND, HELP, HelpSection, Modal, QUIT, REFRESH, commit_item,
+    confirm_popup, diff_hscrollbar, diff_scrollbar, file_item, key_footer, list_scrollbar,
+    pane_block, scope_tabs, typed_popup,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -24,6 +24,9 @@ const REPO_NAME_MAX: usize = 40;
 /// Cap on the origin column, which is the first thing to give when the terminal
 /// is narrow: it identifies a repo, it is not what you came to read.
 const ORIGIN_MAX: usize = 38;
+/// Cap on a remote's URL column, wider than a repo's origin since on the
+/// remotes screen it is half of what a row is about.
+const REMOTE_URL_MAX: usize = 44;
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let [panes, footer_row] =
@@ -62,21 +65,27 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             list(frame, bottom, items, bot_title, true, &mut app.bsel);
         }
 
+        // Remotes on top, the selected remote's branches below.
+        Level::Remotes => {
+            let items = remote_items(app);
+            let top_title = title("remotes", None, &app.msel, false, Pane::Top, edit_top, true);
+            list(frame, top, items, top_title, true, &mut app.msel);
+
+            let items = branch_items(app);
+            let slow = app.bfeed.slow();
+            let name = branches_label(app);
+            let bot_title = title(&name, None, &app.bsel, slow, Pane::Bottom, edit_bot, true);
+            list(frame, bottom, items, bot_title, true, &mut app.bsel);
+        }
+
         // Branches on top, the selected branch's commits below.
         Level::Branches => {
             let labels = stops(&branches::SCOPES, branches::Scope::label);
-            let scope = Some((labels.as_slice(), app.bsel.scope));
+            let scope = (!app.remote_branches()).then_some((labels.as_slice(), app.bsel.scope));
             let items = branch_items(app);
             let slow = app.bfeed.slow();
-            let top_title = title(
-                "branches",
-                scope,
-                &app.bsel,
-                slow,
-                Pane::Top,
-                edit_top,
-                true,
-            );
+            let name = branches_label(app);
+            let top_title = title(&name, scope, &app.bsel, slow, Pane::Top, edit_top, true);
             list(frame, top, items, top_title, true, &mut app.bsel);
 
             let items = commit_items(app, bottom.width);
@@ -214,6 +223,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             c.yes,
         );
     }
+    if let Some(f) = &app.form {
+        f.form.draw(frame, panes);
+    }
     if let Some(modal) = &mut app.modal {
         modal.draw(frame, panes);
     }
@@ -233,6 +245,14 @@ fn actions(app: &App) -> Vec<&'static str> {
     let mut del = false;
     match app.level {
         Level::Repos => keys.extend(["s sync all", "S pull all"]),
+        Level::Remotes => {
+            if app.can_push() {
+                keys.push("p push");
+            }
+            if app.remote().is_some() {
+                keys.extend(["s sync", "S pull"]);
+            }
+        }
         Level::Branches => {
             keys.extend(["s sync", "S pull"]);
             if undo(true) {
@@ -256,6 +276,12 @@ fn actions(app: &App) -> Vec<&'static str> {
         _ => {}
     }
     keys.push("K inspect");
+    if app.level == Level::Remotes {
+        keys.push(CREATE);
+        if app.remote().is_some() {
+            keys.extend([EDIT, DEL]);
+        }
+    }
     if del {
         keys.push(DEL);
     }
@@ -304,6 +330,33 @@ const REPOS: HelpSection = (
     &[
         ("s", "sync every repo (fetch, prune)"),
         ("S", "sync and pull"),
+    ],
+);
+const REMOTES: HelpSection = (
+    "remotes",
+    &[
+        ("↵", "its branches"),
+        ("p", "push this branch there, never forcing"),
+        ("s", "sync it (fetch, prune)"),
+        ("S", "sync, then fast-forward this branch to it"),
+        ("c", "add a remote"),
+        ("e", "change its name or URL"),
+        ("d", "remove it from this clone, asking first"),
+        ("", "↑↓ on a remote: this branch against its copy there"),
+        (
+            "",
+            "↑↓ on its branches: the local branch tracking it, · if none",
+        ),
+    ],
+);
+const IN_A_FORM: HelpSection = (
+    "in a form",
+    &[
+        ("type", "fill the field"),
+        ("tab shift-tab", "the next, previous field"),
+        (CTRL_Y_MOVE, "the next, previous field"),
+        ("↵", "the next field, or submit on the last"),
+        ("esc", "cancel"),
     ],
 );
 const BRANCHES: HelpSection = (
@@ -381,12 +434,16 @@ fn help(app: &App) -> Vec<HelpSection> {
     };
     let mut sections = vec![moving, BELOW, EVERYWHERE];
     let reaches = |level: Level| match level {
-        Level::Tags => app.start == Level::Tags,
+        Level::Tags | Level::Remotes => app.start == level,
+        Level::Repos => app.start == Level::Repos,
         Level::Commits => !app.stashes,
         level => app.start <= level,
     };
     if reaches(Level::Repos) {
         sections.push(REPOS);
+    }
+    if reaches(Level::Remotes) {
+        sections.push(REMOTES);
     }
     if reaches(Level::Branches) {
         sections.push(BRANCHES);
@@ -400,7 +457,11 @@ fn help(app: &App) -> Vec<HelpSection> {
     if app.stashes {
         sections.push(STASHES);
     }
-    sections.extend([DIFF, IN_A_BOX, IN_A_FIND, IN_THIS_HELP]);
+    sections.extend([DIFF, IN_A_BOX]);
+    if reaches(Level::Remotes) {
+        sections.push(IN_A_FORM);
+    }
+    sections.extend([IN_A_FIND, IN_THIS_HELP]);
     sections
 }
 
@@ -502,6 +563,15 @@ fn tags_label(app: &App) -> (String, Option<String>) {
         Some(RemoteTags::Answered { .. }) => Some("as of last fetch".to_string()),
     };
     (name, status)
+}
+
+/// The branch list's name: whose branches they are under `iremote`.
+fn branches_label(app: &App) -> String {
+    match (app.remote_branches(), app.branch_remote.as_str()) {
+        (true, "") => "branches".to_string(),
+        (true, remote) => format!("{remote} branches"),
+        (false, _) => "branches".to_string(),
+    }
 }
 
 /// The commits pane names the paths it was filtered to, or the tag range it
@@ -635,14 +705,29 @@ fn branch_items(app: &App) -> Vec<ListItem<'static>> {
     if app.bsel.is_empty() && app.bfeed.slow() {
         return loading_body();
     }
+    let remote = app.remote_branches();
     app.bsel
         .visible
         .iter()
-        .map(|&i| branch_item(&app.branches[i]))
+        .map(|&i| {
+            let b = &app.branches[i];
+            // A remote's branch reads as the local one that tracks it, since
+            // that is what a push or a pull would move.
+            let local = remote
+                .then(|| {
+                    app.branches
+                        .iter()
+                        .find(|l| !l.remote && l.upstream == b.name)
+                })
+                .map(|l| l.map_or("·".to_string(), branches::Branch::status));
+            branch_item(b, local)
+        })
         .collect()
 }
 
-fn branch_item(b: &branches::Branch) -> ListItem<'static> {
+/// `local` stands in for a remote branch's empty push state: where the local
+/// branch tracking it stands, or `·` when none does.
+fn branch_item(b: &branches::Branch, local: Option<String>) -> ListItem<'static> {
     let name_style = if b.is_head {
         Style::default()
             .fg(Color::Green)
@@ -653,6 +738,12 @@ fn branch_item(b: &branches::Branch) -> ListItem<'static> {
         Style::default().fg(Color::Cyan)
     };
     let (mark, mark_style) = branch_mark(b);
+    let status = local.unwrap_or_else(|| b.status());
+    let status_style = match status.as_str() {
+        "·" | "synced" => Style::default().fg(Color::DarkGray),
+        s if s.contains('↑') => Style::default().fg(Color::Yellow),
+        _ => mark_style,
+    };
     ListItem::new(Line::from(vec![
         Span::raw(if b.is_head { "● " } else { "  " }),
         cell(format!("{mark:<2}"), mark_style),
@@ -660,7 +751,7 @@ fn branch_item(b: &branches::Branch) -> ListItem<'static> {
             format!("{:<NAME_W$}", truncate(&b.name, NAME_W)),
             name_style,
         ),
-        cell(format!("  {:<10}", b.status()), mark_style),
+        cell(format!("  {status:<10}"), status_style),
         Span::styled(
             format!("  {:<14}", b.rel),
             Style::default().fg(Color::Magenta),
@@ -687,6 +778,85 @@ fn branch_mark(b: &branches::Branch) -> (&'static str, Style) {
         );
     }
     ("", Style::default().fg(Color::DarkGray))
+}
+
+fn remote_items(app: &App) -> Vec<ListItem<'static>> {
+    let width = |f: fn(&Remote) -> usize, cap: usize| {
+        app.msel
+            .visible
+            .iter()
+            .map(|&i| f(&app.remotes[i]))
+            .max()
+            .unwrap_or(0)
+            .clamp(1, cap)
+    };
+    let name_w = width(|r| r.name.chars().count(), NAME_W);
+    let url_w = width(|r| r.url.chars().count(), REMOTE_URL_MAX);
+    app.msel
+        .visible
+        .iter()
+        .map(|&i| remote_item(&app.remotes[i], app.head.as_deref(), name_w, url_w))
+        .collect()
+}
+
+/// Mark, name, where it lives, and the checked-out branch against its copy
+/// there.
+fn remote_item(r: &Remote, head: Option<&str>, name_w: usize, url_w: usize) -> ListItem<'static> {
+    let ahead = r.ahead_behind.is_some_and(|(a, _)| a > 0);
+    let mark = if ahead {
+        cell(
+            "↑ ".to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw("  ")
+    };
+    let mut spans = vec![
+        Span::raw("  "),
+        mark,
+        Span::styled(
+            format!("{:<name_w$}", truncate(&r.name, name_w)),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(
+            format!("  {:<url_w$}", truncate(&r.url, url_w)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    let Some(branch) = head else {
+        return ListItem::new(Line::from(spans));
+    };
+    spans.push(Span::styled(
+        format!("  {branch} "),
+        Style::default().fg(Color::Green),
+    ));
+    match r.ahead_behind {
+        None => spans.push(Span::styled(
+            format!("not on {}", r.name),
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Some((0, 0)) => spans.push(Span::styled(
+            "in sync",
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Some((a, b)) => {
+            if a > 0 {
+                spans.push(Span::styled(
+                    format!("↑{a} "),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+            if b > 0 {
+                spans.push(Span::styled(
+                    format!("↓{b}"),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+        }
+    }
+    ListItem::new(Line::from(spans))
 }
 
 fn tag_items(app: &App) -> Vec<ListItem<'static>> {

@@ -4,7 +4,9 @@
 //! for. `slu irepos` starts at Repos, `slu ibranch` at Branches, `slu ilog` at
 //! Commits; Esc walks back up and quits at the level it was entered on. `slu
 //! itag` starts at Tags, which stands where Branches would: a tag's commits
-//! step back to it. `slu istash` starts at Commits, walking the stash.
+//! step back to it. `slu iremote` starts at Remotes, which stands where Repos
+//! would, its branches being one remote's. `slu istash` starts at Commits,
+//! walking the stash.
 //!
 //! Every screen is two panes: the current level's list on top, the level below
 //! it underneath, so the bottom pane always previews where Enter goes. Plain
@@ -16,6 +18,7 @@ mod delete;
 mod diff;
 mod inspect;
 mod keys;
+mod remotes;
 mod repos;
 mod stashes;
 mod tags;
@@ -24,7 +27,7 @@ mod ui;
 pub use branches::Branch;
 
 use crate::git::RepoStatus;
-use crate::git::load::{self, Batch, Commit, FileEntry, RemoteTags, Tag};
+use crate::git::load::{self, Batch, Commit, FileEntry, Remote, RemoteTags, Tag};
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::highlight::RenderedDiff;
 use crate::tui::input::{Accel, stepped};
@@ -60,6 +63,7 @@ const SLOW: Duration = Duration::from_millis(120);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Level {
     Repos,
+    Remotes,
     Branches,
     Tags,
     Commits,
@@ -68,11 +72,12 @@ pub enum Level {
 
 impl Level {
     /// The level Esc steps back to from here, in an app entered at `start`, or
-    /// None at the top of the stack. Only `itag` enters at Tags, and nothing
-    /// sits above them.
+    /// None at the top of the stack. Only `itag` enters at Tags and only
+    /// `iremote` at Remotes, and nothing sits above either.
     fn back(self, start: Level) -> Option<Level> {
         match self {
-            Level::Repos | Level::Tags => None,
+            Level::Repos | Level::Remotes | Level::Tags => None,
+            Level::Branches if start == Level::Remotes => Some(Level::Remotes),
             Level::Branches => Some(Level::Repos),
             Level::Commits if start == Level::Tags => Some(Level::Tags),
             Level::Commits => Some(Level::Branches),
@@ -262,6 +267,10 @@ pub struct App {
     sync_next: Option<bool>,
     /// A delete on a remote waiting for the same frame, for the same reason.
     delete_next: Option<delete::Target>,
+    /// `p` on a remote, waiting for the same frame.
+    push_next: Option<String>,
+    /// `c` or `e` on a remote, whose form owns every key while it is up.
+    form: Option<remotes::RemoteForm>,
     /// What `u` would put back.
     undo: Option<delete::Undo>,
     /// The `:` line while one is open. It owns every key until it is run or
@@ -290,6 +299,14 @@ pub struct App {
     /// What `slu irepos` was pointed at, kept so `r` can scan it again.
     base: PathBuf,
     depth: usize,
+
+    // ── remotes level ───────────────────────────────────────────────────────
+    remotes: Vec<Remote>,
+    msel: Sel,
+    /// The checked-out branch, which every remote is measured against.
+    head: Option<String>,
+    /// Under `iremote`, the remote whose branches the branch list keeps.
+    branch_remote: String,
 
     // ── branches level ──────────────────────────────────────────────────────
     branches: Vec<Branch>,
@@ -363,6 +380,8 @@ impl App {
             confirm: None,
             sync_next: None,
             delete_next: None,
+            push_next: None,
+            form: None,
             undo: None,
             command: None,
             pending: false,
@@ -375,6 +394,10 @@ impl App {
             repo,
             base: PathBuf::from("."),
             depth: 0,
+            remotes: Vec::new(),
+            msel: Sel::default(),
+            head: None,
+            branch_remote: String::new(),
             branches: Vec::new(),
             bsel: Sel::scoped(branches::DEFAULT_SCOPE),
             bfeed: Feed::default(),
@@ -435,6 +458,18 @@ impl App {
         app.rescope_branches();
         app.enter_branch();
         Some(app)
+    }
+
+    /// `slu iremote`: the remotes of the repo we are standing in, previewing
+    /// each one's branches. It opens with none too, since a repo without a
+    /// remote is where `c` is wanted most.
+    pub fn at_remotes(repo: String) -> App {
+        let mut app = App::new(Level::Remotes, repo);
+        app.load_remotes();
+        app.load_branches();
+        app.rescope_remotes();
+        app.enter_remote();
+        app
     }
 
     /// `slu itag`: the tags of the repo we are standing in, marked against its
@@ -516,11 +551,15 @@ impl App {
             }
             terminal.draw(|frame| ui::draw(frame, self))?;
             if let Some(pull) = self.sync_next.take() {
-                if self.level == Level::Repos {
-                    self.sync_all(pull);
-                } else {
-                    self.sync(pull);
+                match self.level {
+                    Level::Repos => self.sync_all(pull),
+                    Level::Remotes => self.sync_remote(pull),
+                    _ => self.sync(pull),
                 }
+                continue;
+            }
+            if let Some(remote) = self.push_next.take() {
+                self.push(&remote);
                 continue;
             }
             if let Some(target) = self.delete_next.take() {
@@ -671,6 +710,7 @@ impl App {
         self.pending = false;
         match self.level {
             Level::Repos => self.enter_repo(),
+            Level::Remotes => self.enter_remote(),
             Level::Branches => self.enter_branch(),
             Level::Tags => self.enter_tag(),
             Level::Commits => self.enter_commit(),
@@ -683,7 +723,10 @@ impl App {
     fn pane_sel(&mut self, pane: Pane) -> Option<&mut Sel> {
         Some(match (self.level, pane) {
             (Level::Repos, Pane::Top) => &mut self.rsel,
-            (Level::Repos, Pane::Bottom) | (Level::Branches, Pane::Top) => &mut self.bsel,
+            (Level::Remotes, Pane::Top) => &mut self.msel,
+            (Level::Repos | Level::Remotes, Pane::Bottom) | (Level::Branches, Pane::Top) => {
+                &mut self.bsel
+            }
             (Level::Tags, Pane::Top) => &mut self.tsel,
             (Level::Branches | Level::Tags, Pane::Bottom) | (Level::Commits, Pane::Top) => {
                 &mut self.csel
@@ -711,7 +754,10 @@ impl App {
     fn refilter(&mut self, pane: Pane) {
         match (self.level, pane) {
             (Level::Repos, Pane::Top) => self.rescope_repos(),
-            (Level::Repos, Pane::Bottom) | (Level::Branches, Pane::Top) => self.rescope_branches(),
+            (Level::Remotes, Pane::Top) => self.rescope_remotes(),
+            (Level::Repos | Level::Remotes, Pane::Bottom) | (Level::Branches, Pane::Top) => {
+                self.rescope_branches()
+            }
             (Level::Tags, Pane::Top) => self.rescope_tags(),
             (Level::Branches | Level::Tags, Pane::Bottom) | (Level::Commits, Pane::Top) => {
                 self.rescope_commits()
@@ -745,6 +791,10 @@ impl App {
                 self.rsel.restore = keep;
                 self.rescope_repos();
                 self.pending = true;
+            }
+            Level::Remotes => {
+                let keep = self.remote().map(|r| r.name.clone());
+                self.reread_remotes(keep);
             }
             Level::Branches => {
                 self.bsel.restore = self.bsel.idx().map(|i| self.branches[i].name.clone());
@@ -992,6 +1042,41 @@ mod tests {
                 .any(|s| s.content.contains(word))
         };
         assert!(shows("after"), "the amended change is on screen");
+    }
+
+    #[test]
+    fn a_push_sets_an_upstream_only_for_a_branch_that_has_none() {
+        // `p` on a fork's `upstream` must not quietly repoint where `main`
+        // pulls from, while a branch never pushed anywhere should come out of
+        // its first push tracking what it was pushed to.
+        let stage = Stage::new();
+        let second = stage.dir.join("second.git");
+        let second = second.to_str().expect("utf-8 temp path");
+        git_capture(".", &["init", "-q", "--bare", second]).expect("second remote");
+        stage.git(&["remote", "add", "second", second]);
+        let upstream = |branch: &str| {
+            git_capture(
+                &stage.work(),
+                &["rev-parse", "--abbrev-ref", &format!("{branch}@{{u}}")],
+            )
+        };
+        let tracked = upstream("HEAD").expect("the stage pushes with -u");
+
+        stage.commit("only here");
+        crate::git::load::push_branch(&stage.work(), "second").expect("push to second");
+        assert_eq!(
+            upstream("HEAD").as_deref(),
+            Some(tracked.as_str()),
+            "pushing to another remote moved the upstream"
+        );
+
+        stage.git(&["checkout", "-q", "-b", "topic"]);
+        crate::git::load::push_branch(&stage.work(), "second").expect("push topic");
+        assert_eq!(
+            upstream("topic").as_deref(),
+            Some("second/topic"),
+            "a first push leaves the branch tracking nothing"
+        );
     }
 
     fn repo(dirty: usize, ahead: usize) -> RepoStatus {

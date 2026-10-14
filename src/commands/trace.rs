@@ -130,7 +130,7 @@ fn graph_log(all: bool, limit: usize) {
     for (rail, row) in &parsed {
         match row {
             Some(r) => print_row(rail, r, rel_w, width),
-            None => println!("{rail}"),
+            None => outln!("{rail}"),
         }
     }
 }
@@ -179,7 +179,7 @@ fn print_row(rail: &str, r: &Row, rel_w: usize, width: usize) {
     let rel = format!("{rel_token:>rel_w$}");
     let who = format!("<{who}>");
 
-    println!(
+    outln!(
         "{rail}{}  {}  {}  {} {refs}{}",
         hash.yellow(),
         r.date.green(),

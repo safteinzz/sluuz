@@ -87,7 +87,7 @@ pub fn run(args: Args) {
     if args.add {
         install(args.shell);
     } else {
-        print!("{}", args.shell.script());
+        out!("{}", args.shell.script());
     }
 }
 
@@ -107,7 +107,7 @@ fn install(shell: Shell) {
     if let Ok(existing) = std::fs::read_to_string(&rc)
         && existing.lines().any(|l| l.trim() == line)
     {
-        println!(
+        outln!(
             "{} {}",
             "✓ already set up in".dimmed(),
             rc.display().to_string().bold()
@@ -126,12 +126,12 @@ fn install(shell: Shell) {
     let block = format!("\n# sluuz shell completion\n{line}\n");
     match append(&rc, &block) {
         Ok(()) => {
-            println!(
+            outln!(
                 "{} {}",
                 "✓ added slu completion to".green(),
                 rc.display().to_string().bold()
             );
-            println!(
+            outln!(
                 "{}",
                 "  restart your shell (or re-source the file) to use it.".dimmed()
             );

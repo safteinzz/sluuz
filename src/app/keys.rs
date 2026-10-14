@@ -8,7 +8,7 @@ use super::{App, Level, Pane, branches, commits, repos, tags};
 use crate::tui::input::{
     is_back, is_ctrl_c, is_down, is_help, is_left, is_open, is_right, is_up, norm_esc,
 };
-use crate::tui::widgets::{Command, CommandLine, Typed};
+use crate::tui::widgets::{Command, CommandLine, FormKey, Typed};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -21,6 +21,7 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
     // the view itself.
     if is_ctrl_c(code, ctrl) {
         let open = app.modal.is_some()
+            || app.form.is_some()
             || app.confirm.is_some()
             || app.command.is_some()
             || app.editing.is_some();
@@ -33,6 +34,15 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
     if let Some(modal) = &mut app.modal {
         if modal.on_key(code, ctrl) {
             app.modal = None;
+        }
+        return false;
+    }
+    // So does a remote's form, under any alert its submit raised.
+    if let Some(f) = &mut app.form {
+        match f.form.on_key(code, key) {
+            FormKey::Open => {}
+            FormKey::Cancel => app.form = None,
+            FormKey::Submit => app.submit_remote(),
         }
         return false;
     }
@@ -143,6 +153,7 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent, terminal: &mut DefaultTermina
     let steps = app.accel.steps(code, ctrl);
     match app.level {
         Level::Repos => repos_key(app, code, ctrl, steps),
+        Level::Remotes => remotes_key(app, code, ctrl, steps),
         Level::Branches => branches_key(app, code, ctrl, steps),
         Level::Tags => tags_key(app, code, ctrl, steps),
         Level::Commits => commits_key(app, code, ctrl, steps),
@@ -207,6 +218,44 @@ fn repos_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
     false
 }
 
+/// Remotes on top, the selected remote's branches below.
+fn remotes_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
+    if !ctrl {
+        match code {
+            KeyCode::Char('p') => app.ask_push(),
+            KeyCode::Char('c') => app.create_remote(),
+            KeyCode::Char('e') => app.edit_remote(),
+            KeyCode::Char('d') => app.ask_delete_remote(),
+            KeyCode::Char(c @ ('s' | 'S')) if app.remote().is_some() => {
+                let name = app.remote().map(|r| r.name.clone()).unwrap_or_default();
+                app.set_status(if c == 'S' {
+                    format!("pulling from {name}…")
+                } else {
+                    format!("syncing {name}…")
+                });
+                app.sync_next = Some(c == 'S');
+            }
+            _ => {}
+        }
+        if matches!(code, KeyCode::Char('p' | 'c' | 'e' | 'd' | 's' | 'S')) {
+            return false;
+        }
+    }
+    if ctrl && (is_down(code) || is_up(code)) {
+        app.bsel.step(is_down(code), steps);
+    } else if is_down(code) || is_up(code) {
+        if app.msel.step(is_down(code), steps) {
+            app.pending = true;
+        }
+    } else if is_open(code) && !app.bsel.is_empty() {
+        app.enter_branch();
+        app.level = Level::Branches;
+    } else if is_back(code) {
+        return app.back();
+    }
+    false
+}
+
 /// Branches on top, the selected branch's commits below.
 fn branches_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
     if !ctrl && code == KeyCode::Char('d') {
@@ -232,7 +281,8 @@ fn branches_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool 
             app.pending = true;
         }
     } else if !ctrl && (is_left(code) || is_right(code)) {
-        if app.bsel.slide(is_right(code), branches::SCOPES.len()) {
+        // a remote's branches have no tabs to slide between
+        if !app.remote_branches() && app.bsel.slide(is_right(code), branches::SCOPES.len()) {
             app.rescope_branches();
             app.pending = true;
         }

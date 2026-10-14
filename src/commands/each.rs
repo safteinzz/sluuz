@@ -27,7 +27,7 @@ struct Outcome {
 pub fn run(args: Args) {
     let repos = repos_or_exit(Path::new("."), 3);
 
-    println!("{} {}\n", "git".dimmed(), args.args.join(" ").bold());
+    outln!("{} {}\n", "git".dimmed(), args.args.join(" ").bold());
 
     let argv: Vec<&str> = args.args.iter().map(String::as_str).collect();
 
@@ -51,21 +51,21 @@ pub fn run(args: Args) {
             failed += 1;
             "✗".red()
         };
-        println!("{} {}", mark, format!("━━━ {}", o.name).cyan().bold());
+        outln!("{} {}", mark, format!("━━━ {}", o.name).cyan().bold());
         if o.output.is_empty() {
-            println!("  {}", "(no output)".dimmed());
+            outln!("  {}", "(no output)".dimmed());
         } else {
             for line in o.output.lines() {
-                println!("  {}", line);
+                outln!("  {}", line);
             }
         }
-        println!();
+        outln!();
     }
 
     let summary = format!("{} repos · {} failed", outcomes.len(), failed);
     if failed > 0 {
-        println!("{}", summary.red());
+        outln!("{}", summary.red());
     } else {
-        println!("{}", summary.dimmed());
+        outln!("{}", summary.dimmed());
     }
 }

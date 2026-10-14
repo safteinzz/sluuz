@@ -26,7 +26,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) {
-    println!("{} {}\n", "Searching for:".dimmed(), args.pattern.bold());
+    outln!("{} {}\n", "Searching for:".dimmed(), args.pattern.bold());
 
     let repos: Vec<PathBuf> = if args.recursive {
         repos_or_exit(Path::new("."), 10)
@@ -57,14 +57,14 @@ pub fn run(args: Args) {
         .collect();
 
     if results.is_empty() {
-        println!("{}", "No matches found.".dimmed());
+        outln!("{}", "No matches found.".dimmed());
         return;
     }
 
     results.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (_, output) in results {
-        print!("{}", output);
+        out!("{}", output);
     }
 }
 

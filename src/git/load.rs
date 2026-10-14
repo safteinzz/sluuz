@@ -298,6 +298,89 @@ pub fn remote_urls(repo: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A remote, and where the checked-out branch stands against its copy there.
+#[derive(Clone)]
+pub struct Remote {
+    pub name: String,
+    pub url: String,
+    /// Where a push goes, which `git remote set-url --push` can set apart.
+    pub push_url: String,
+    /// The checked-out branch against `<remote>/<branch>`: commits only it
+    /// has, then commits only the remote has. None when HEAD is detached or
+    /// the remote has no branch by that name.
+    pub ahead_behind: Option<(usize, usize)>,
+}
+
+/// Every remote, in the order the config lists them, each measured against
+/// `head`, the checked-out branch.
+pub fn load_remotes(repo: &str, head: Option<&str>) -> Vec<Remote> {
+    let out = git_capture(
+        repo,
+        &["config", "--get-regexp", r"^remote\..*\.(url|pushurl)$"],
+    )
+    .unwrap_or_default();
+    let mut remotes = parse_remotes(&out);
+    for r in &mut remotes {
+        r.ahead_behind = head.and_then(|b| ahead_behind(repo, &format!("{}/{b}", r.name)));
+    }
+    remotes
+}
+
+/// `remote.<name>.url` and `.pushurl` config lines into one `Remote` per
+/// name. The URLs as configured, not as `git remote -v` prints them after
+/// `insteadOf`, which turns a short alias the user typed into whatever it
+/// stands for.
+fn parse_remotes(out: &str) -> Vec<Remote> {
+    let mut remotes: Vec<Remote> = Vec::new();
+    for line in out.lines() {
+        let Some((key, url)) = line.split_once(' ') else {
+            continue;
+        };
+        let Some((name, field)) = key.strip_prefix("remote.").and_then(|k| k.rsplit_once('.'))
+        else {
+            continue;
+        };
+        let at = match remotes.iter().position(|r| r.name == name) {
+            Some(at) => at,
+            None => {
+                remotes.push(Remote {
+                    name: name.to_string(),
+                    url: String::new(),
+                    push_url: String::new(),
+                    ahead_behind: None,
+                });
+                remotes.len() - 1
+            }
+        };
+        match field {
+            "url" => remotes[at].url = url.to_string(),
+            "pushurl" => remotes[at].push_url = url.to_string(),
+            _ => {}
+        }
+    }
+    // A remote with no `pushurl` pushes where it fetches.
+    for r in &mut remotes {
+        if r.push_url.is_empty() {
+            r.push_url = r.url.clone();
+        }
+    }
+    remotes
+}
+
+/// HEAD against `remote_branch` (`origin/main`), or None when this clone has
+/// no such ref.
+fn ahead_behind(repo: &str, remote_branch: &str) -> Option<(usize, usize)> {
+    let range = format!("HEAD...refs/remotes/{remote_branch}");
+    let out = git_capture(repo, &["rev-list", "--left-right", "--count", &range])?;
+    let mut f = out.split_whitespace().map(|n| n.parse().ok());
+    Some((f.next()??, f.next()??))
+}
+
+/// The checked-out branch, or None on a detached HEAD.
+pub fn head_branch(repo: &str) -> Option<String> {
+    git_capture(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+}
+
 /// One `--pretty=format:` line back into a `Commit`.
 fn parse_commit(line: &str) -> Option<Commit> {
     let mut f = line.split(SEP);
@@ -700,15 +783,60 @@ pub fn fast_forward(repo: &str) -> Result<Option<usize>, String> {
     if git_capture(repo, &["rev-parse", "--abbrev-ref", "@{u}"]).is_none() {
         return Ok(None);
     }
+    fast_forward_to(repo, "@{u}").map(Some)
+}
+
+/// Fast-forward the checked-out branch to `rev`, which `fast_forward` does with
+/// its upstream and `iremote` with the same branch on another remote, such as
+/// the `upstream` of a fork. Ok carries how many commits it moved by.
+pub fn fast_forward_to(repo: &str, rev: &str) -> Result<usize, String> {
     let before = git_capture(repo, &["rev-parse", "HEAD"]).unwrap_or_default();
-    let (ok, out) = crate::git::git_run(repo, &["merge", "--ff-only", "--quiet", "@{u}"]);
+    let (ok, out) = crate::git::git_run(repo, &["merge", "--ff-only", "--quiet", rev]);
     if !ok {
-        return Err(out);
+        // git leads with advice on how to merge instead, and the line saying
+        // what failed comes after it.
+        let said: Vec<&str> = out.lines().filter(|l| !l.starts_with("hint:")).collect();
+        return Err(said.join("\n"));
     }
-    let moved = git_capture(repo, &["rev-list", "--count", &format!("{before}..HEAD")])
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0);
-    Ok(Some(moved))
+    Ok(
+        git_capture(repo, &["rev-list", "--count", &format!("{before}..HEAD")])
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0),
+    )
+}
+
+/// `git fetch --prune <remote>`, the one-remote `fetch_prune`.
+pub fn fetch_remote(repo: &str, remote: &str) -> Result<(), String> {
+    run_unattended(repo, &["fetch", "--prune", "--quiet", remote])
+}
+
+/// Push the checked-out branch to the branch of the same name on `remote`,
+/// never forcing, so a remote with commits this clone lacks refuses in git's
+/// own words. `-u` only for a branch that tracks nothing yet: pushing a fork's
+/// branch to `upstream` must not quietly move where it pulls from.
+pub fn push_branch(repo: &str, remote: &str) -> Result<(), String> {
+    let tracks = git_capture(repo, &["rev-parse", "--abbrev-ref", "@{u}"]).is_some();
+    let mut args = vec!["push", "--quiet"];
+    if !tracks {
+        args.push("-u");
+    }
+    args.extend([remote, "HEAD"]);
+    run_unattended(repo, &args)
+}
+
+/// Run `args` through `unattended_git`, git's own words being the error.
+fn run_unattended(repo: &str, args: &[&str]) -> Result<(), String> {
+    let out = unattended_git(repo)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// Delete `refname` on `remote` (`git push <remote> :<refname>`), through
@@ -900,6 +1028,7 @@ pub fn commit_diff_ctx(repo: &str, hash: &str, path: &str) -> DiffContext {
 
 #[cfg(test)]
 mod tests {
+    use super::parse_remotes;
     use super::{DECORATE, RefKind, RefLabel, fit_refs, parse_refs, tag_copy, tag_rule};
     use super::{RemoteTags, ask, landed, load_branches, load_diff_raw, load_files, load_tags};
     use crate::git::git_capture;
@@ -1162,5 +1291,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_remote_pushing_somewhere_else_keeps_both_urls() {
+        // `git remote set-url --push` adds a `pushurl`, and the remotes screen
+        // shows it apart only when it differs from where the remote fetches.
+        let out = "remote.origin.url https://example.com/a.git\n\
+                   remote.origin.pushurl git@example.com:a.git\n\
+                   remote.fork.url /srv/fork.git\n";
+        let remotes = parse_remotes(out);
+        let names: Vec<&str> = remotes.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["origin", "fork"],
+            "one remote per name, in git's order"
+        );
+        assert_eq!(remotes[0].url, "https://example.com/a.git");
+        assert_eq!(remotes[0].push_url, "git@example.com:a.git");
+        assert_eq!(remotes[1].url, remotes[1].push_url);
     }
 }

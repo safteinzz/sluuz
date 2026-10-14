@@ -132,7 +132,10 @@ seal_remotes() {
     name=$(basename "$repo")
     g -C "$repo" config remote.origin.url "git@gitlab.com:acme/$name.git"
   done
+  g -C "$WORK/notifications-worker" config remote.upstream.url \
+    "git@gitlab.com:platform/notifications-worker.git"
   g config --global url."$REMOTES/".insteadOf "git@gitlab.com:acme/"
+  g config --global url."$REMOTES/platform-".insteadOf "git@gitlab.com:platform/"
 }
 
 # `gone <repo> <branch>` - a branch whose upstream was deleted on the forge:
@@ -349,6 +352,22 @@ EOF
   printf '.env\n__pycache__/\n' > "$r/.gitignore"
   c "$r" 4838400 ada "Stop tracking .env"
   origin "$r"
+
+  # A fork of the platform team's worker: `upstream` is theirs, with two
+  # commits this fork has not taken yet, so iremote measures main against two
+  # remotes that disagree.
+  g init -q --bare "$REMOTES/platform-notifications-worker.git"
+  g -C "$r" remote add upstream "$REMOTES/platform-notifications-worker.git"
+  g -C "$r" push -q upstream main
+  g -C "$r" checkout -q -b theirs
+  sed -i 's/^CHANNELS = {"email": email, "push": push, "sms": sms}/CHANNELS = {"email": email, "push": push, "sms": sms, "webhook": webhook}/' "$r/worker.py"
+  sed -i 's/^from channels import email, push, sms/from channels import email, push, sms, webhook/' "$r/worker.py"
+  c "$r" 1209600 platform "Add a webhook channel"
+  sed -i 's/^POLL_SECONDS = 2/POLL_SECONDS = 3/' "$r/worker.py"
+  c "$r" 432000 platform "Poll less often when idle"
+  g -C "$r" push -q upstream theirs:main
+  g -C "$r" checkout -q main
+  g -C "$r" branch -q -D theirs
 
   # Three commits that exist here and on no remote: the ↑3 in the dashboard.
   printf 'RETRY_BACKOFF_SECONDS=30\n' >> "$r/.env"

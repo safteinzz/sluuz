@@ -10,9 +10,9 @@ Output "home/plain.gif"
 Set Shell bash
 Set FontFamily "JetBrainsMono NF"
 Set Theme "Catppuccin Mocha"
-Set FontSize 14
-Set Width 960
-Set Height 600
+Set FontSize 15
+Set Width 1056
+Set Height 664
 Set Padding 20
 Set Framerate 20
 Set TypingSpeed 1ms
@@ -107,4 +107,17 @@ Type "slu stash show stash@{0}"
 Enter
 Sleep 1.2s
 Screenshot ../readme-assets/stash-plain.png
+Sleep 1s
+
+# ---- the remotes, and where each branch stands against them, as git prints it
+Type "cd ../notifications-worker && clear"
+Enter
+Sleep 400ms
+Type "slu remote"
+Enter
+Sleep 1.2s
+Type "slu branch -vv"
+Enter
+Sleep 1.2s
+Screenshot ../readme-assets/remote-plain.png
 Sleep 1s

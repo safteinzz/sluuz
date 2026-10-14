@@ -9,6 +9,24 @@
 //! manifest, those doc comments and `AFTER`, and is the only copy of that
 //! list.
 
+/// `print!` for a command's output, ending the process quietly once the
+/// reader of stdout has gone (`slu scan | head`) where `print!` panics.
+macro_rules! out {
+    ($($arg:tt)*) => {
+        $crate::emit(format_args!($($arg)*))
+    };
+}
+
+/// `println!` the way `out!` is `print!`.
+macro_rules! outln {
+    () => {
+        $crate::emit(format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::emit(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
 mod app;
 mod commands;
 mod git;
@@ -136,6 +154,10 @@ enum Cmd {
     ///   every tag against the remote · enter opens what went into it, d deletes
     #[command(verbatim_doc_comment)]
     Itag(commands::itag::Args),
+    /// Interactive remote explorer (TUI)
+    ///   every remote against this branch · p pushes, s/S sync, c/e/d manage
+    #[command(verbatim_doc_comment)]
+    Iremote(commands::iremote::Args),
     /// Interactive log explorer (TUI)  [PATH]...
     ///   commits on top, the selected commit's diff below
     ///   -a        include all branches
@@ -181,6 +203,7 @@ fn main() {
         Cmd::Irepos(args) => commands::irepos::run(args),
         Cmd::Ibranch(args) => commands::ibranch::run(args),
         Cmd::Itag(args) => commands::itag::run(args),
+        Cmd::Iremote(args) => commands::iremote::run(args),
         Cmd::Iscan(args) => commands::iscan::run(args),
         Cmd::Istatus(args) => commands::istatus::run(args),
         Cmd::Istash(args) => commands::istash::run(args),
@@ -264,6 +287,19 @@ fn passthrough(args: &[String]) -> ! {
         Err(e) => {
             eprintln!("slu: could not run git: {e}");
             std::process::exit(127);
+        }
+    }
+}
+
+/// What `out!` and `outln!` expand to.
+fn emit(args: std::fmt::Arguments) {
+    use std::io::Write;
+    match std::io::stdout().lock().write_fmt(args) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(_) => {
+            eprintln!("error: could not write the output; is the disk it goes to full?");
+            std::process::exit(1);
         }
     }
 }
