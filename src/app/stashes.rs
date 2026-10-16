@@ -6,7 +6,7 @@
 //! position (`stash@{2}`), which is also what `git stash` takes.
 
 use super::App;
-use super::delete::{Confirm, GIT_WORDS, Target};
+use super::delete::{Confirm, Target, git_words};
 use crate::git::{git_capture, git_run};
 use crate::tui::widgets::Modal;
 
@@ -130,11 +130,8 @@ impl App {
         }
         let (ok, out) = git_run(&self.repo, &["stash", "drop", "-q", name]);
         if !ok {
-            let words: Vec<&str> = out.lines().take(GIT_WORDS).collect();
-            self.modal = Some(Modal::new(
-                format!("could not drop `{name}`"),
-                words.join("\n"),
-            ));
+            let words = git_words(&out);
+            self.modal = Some(Modal::new(format!("could not drop `{name}`"), words));
             return;
         }
         let short: String = hash.chars().take(7).collect();

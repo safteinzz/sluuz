@@ -165,7 +165,7 @@ enum Cmd {
     #[command(verbatim_doc_comment)]
     Ilog(commands::ilog::Args),
     /// Interactive git status - stage/unstage + diffs (TUI)
-    ///   this repo · h/l ←→ tabs · s/u/space stage
+    ///   this repo · h/l ←→ tabs · s/u/space stage · c commits
     #[command(verbatim_doc_comment)]
     Istatus(commands::istatus::Args),
     /// Interactive stash explorer (TUI)

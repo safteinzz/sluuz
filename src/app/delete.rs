@@ -13,7 +13,7 @@ use crate::git::{git_capture, git_run};
 use crate::tui::widgets::{Modal, Query};
 use ratatui::style::Color;
 
-pub(super) use crate::git::GIT_WORDS;
+pub(super) use crate::git::git_words;
 
 /// What `u` puts back: the last ref `d` deleted from this clone, exactly as it
 /// was - the object it named and, for a branch, the upstream `git branch -D`
@@ -378,10 +378,10 @@ impl App {
         // An empty old value makes git refuse if the ref exists again.
         let (ok, out) = git_run(&self.repo, &["update-ref", &undo.refname, &undo.sha, ""]);
         if !ok {
-            let words: Vec<&str> = out.lines().take(GIT_WORDS).collect();
+            let words = git_words(&out);
             self.modal = Some(Modal::new(
                 format!("could not put back `{}`", undo.name),
-                words.join("\n"),
+                words,
             ));
             return;
         }
@@ -431,10 +431,10 @@ impl App {
     }
 
     fn fail(&mut self, target: &Target, words: &str) {
-        let words: Vec<&str> = words.lines().take(GIT_WORDS).collect();
+        let words = git_words(words);
         self.modal = Some(Modal::new(
             format!("could not delete `{}`", target.name()),
-            words.join("\n"),
+            words,
         ));
     }
 
@@ -472,8 +472,8 @@ impl App {
     pub(super) fn sync(&mut self, pull: bool) {
         if let Err(words) = load::fetch_prune(&self.repo) {
             self.note = None;
-            let words: Vec<&str> = words.lines().take(GIT_WORDS).collect();
-            self.modal = Some(Modal::new("sync failed", words.join("\n")));
+            let words = git_words(&words);
+            self.modal = Some(Modal::new("sync failed", words));
             return;
         }
         let note = if pull {

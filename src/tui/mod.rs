@@ -24,6 +24,10 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::{ExecutableCommand, execute};
 use std::io::stdout;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
+use std::sync::{Arc, OnceLock};
 
 // ── keyboard enhancement (kitty protocol) ───────────────────────────────────
 
@@ -44,6 +48,55 @@ pub fn push_keyboard_enhancement() -> bool {
 
 pub fn pop_keyboard_enhancement() {
     let _ = stdout().execute(PopKeyboardEnhancementFlags);
+}
+
+/// Hand the terminal to `run` (a difftool, which may be an editor), then take
+/// it back. Ctrl-C meanwhile reaches the child and not the app, whose screen
+/// would otherwise vanish with whatever it was holding.
+pub fn suspended<T>(terminal: &mut DefaultTerminal, enhanced: bool, run: impl FnOnce() -> T) -> T {
+    if enhanced {
+        pop_keyboard_enhancement();
+    }
+    ratatui::restore();
+    let out = interrupts_to_child(run);
+    *terminal = ratatui::init();
+    if enhanced {
+        push_keyboard_enhancement();
+    }
+    out
+}
+
+#[cfg(unix)]
+fn interrupts_to_child<T>(run: impl FnOnce() -> T) -> T {
+    let ours = interrupts_end_us();
+    ours.store(false, Ordering::SeqCst);
+    let out = run();
+    ours.store(true, Ordering::SeqCst);
+    out
+}
+
+#[cfg(not(unix))]
+fn interrupts_to_child<T>(run: impl FnOnce() -> T) -> T {
+    run()
+}
+
+/// Whether SIGINT and SIGQUIT end the app the way they would with no handler,
+/// which `suspended` turns off while a child has the terminal. The handler is
+/// installed once and never removed, because removing one through
+/// signal-hook leaves the signal ignored for the rest of the process. A caught
+/// signal is reset to the default for the child it execs, where an ignored one
+/// would leave it unable to be cancelled.
+#[cfg(unix)]
+fn interrupts_end_us() -> &'static Arc<AtomicBool> {
+    use signal_hook::consts::{SIGINT, SIGQUIT};
+    static OURS: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    OURS.get_or_init(|| {
+        let ours = Arc::new(AtomicBool::new(true));
+        for signal in [SIGINT, SIGQUIT] {
+            let _ = signal_hook::flag::register_conditional_default(signal, ours.clone());
+        }
+        ours
+    })
 }
 
 // ── terminal geometry ───────────────────────────────────────────────────────

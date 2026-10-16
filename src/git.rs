@@ -252,9 +252,21 @@ pub fn first_line(s: &str) -> String {
         .to_string()
 }
 
-/// How much of git's own complaint a box shows, so a long one cannot fill the
-/// screen.
-pub const GIT_WORDS: usize = 8;
+/// How many lines of git's own complaint a box shows.
+const GIT_WORDS: usize = 5;
+
+/// What git said, cut to what failed for a box: blank lines and gpg's
+/// `[GNUPG:]` status lines go (git passes them on when signing fails), a line
+/// repeated at once is kept once, and no more than `GIT_WORDS` lines stay.
+pub fn git_words(said: &str) -> String {
+    let mut lines: Vec<&str> = said
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with("[GNUPG:]"))
+        .collect();
+    lines.dedup();
+    lines.truncate(GIT_WORDS);
+    lines.join("\n")
+}
 
 /// Run `git -C <repo> <args>` and return (success, combined stdout+stderr).
 /// For commands like fetch/pull where progress goes to stderr and you want to
@@ -272,7 +284,7 @@ pub fn git_run(repo: &str, args: &[&str]) -> (bool, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_repos, git_capture, prunes_on_fetch, short_remote};
+    use super::{find_repos, git_capture, git_words, prunes_on_fetch, short_remote};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -437,6 +449,37 @@ mod tests {
         assert!(
             found.contains(&dir.0),
             "and so should the repo it belongs to, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_box_shows_at_most_five_lines_of_git_and_no_gpg_status() {
+        // what `git commit` says when the passphrase prompt is cancelled
+        let said = "error: gpg failed to sign the data:\n\
+            [GNUPG:] KEY_CONSIDERED 0123456789ABCDEF0123456789ABCDEF01234567 2\n\
+            [GNUPG:] BEGIN_SIGNING H10\n\
+            gpg: signing failed: Operation cancelled\n\
+            [GNUPG:] FAILURE sign 83886179\n\
+            gpg: signing failed: Operation cancelled\n\
+            \n\
+            fatal: failed to write commit object";
+        let words = git_words(said);
+        assert_eq!(
+            words.lines().collect::<Vec<_>>(),
+            [
+                "error: gpg failed to sign the data:",
+                "gpg: signing failed: Operation cancelled",
+                "fatal: failed to write commit object",
+            ],
+            "gpg's status lines, the blank and the repeat should go, and git's last line stay"
+        );
+
+        let long: Vec<String> = (1..=9).map(|n| format!("remote: line {n}")).collect();
+        let words = git_words(&long.join("\n"));
+        assert_eq!(
+            words.lines().count(),
+            5,
+            "a long complaint should be cut to five lines, got:\n{words}"
         );
     }
 }

@@ -7,8 +7,8 @@
 //! keep a copy of what the tool said and hand it back as a modal - without it,
 //! a difftool that cannot run looks exactly like a key that did nothing.
 
+use super::suspended;
 use super::widgets::Modal;
-use super::{pop_keyboard_enhancement, push_keyboard_enhancement};
 use crate::git::git_capture;
 use ratatui::DefaultTerminal;
 use std::io::{self, Read};
@@ -86,19 +86,7 @@ pub fn run_difftool(
         ));
     }
 
-    // Hand the terminal back to the external tool.
-    if enhanced {
-        pop_keyboard_enhancement();
-    }
-    ratatui::restore();
-
-    let outcome = handoff(dir, args);
-
-    // Re-enter the TUI exactly as run() first set it up.
-    *terminal = ratatui::init();
-    if enhanced {
-        push_keyboard_enhancement();
-    }
+    let outcome = suspended(terminal, enhanced, || handoff(dir, args));
     let _ = terminal.clear();
 
     match outcome {

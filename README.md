@@ -97,8 +97,8 @@ slu status -sb           # real git, passed straight through
 ![slu status -sb and slu log as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status-plain.png)
 
 `git status` you can act on, in git's own two-column code: `s` stages, `u`
-unstages, and `S` and `U` do it to every file the list shows. `d` throws a
-file's changes away once you type its name.
+unstages, and `S` and `U` do it to every file the list shows. `c` commits
+what is staged, and `d` throws a file's changes away once you type its name.
 
 ## See what a stash holds
 

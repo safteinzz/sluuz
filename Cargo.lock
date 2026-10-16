@@ -818,6 +818,7 @@ dependencies = [
  "colored",
  "ratatui",
  "rayon",
+ "signal-hook",
  "syntect",
  "terminal_size",
  "walkdir",

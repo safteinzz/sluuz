@@ -4,15 +4,17 @@
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
 //! move between the **all**, **staged** and **unstaged** tabs; `s`/`u`/Space
 //! stage / unstage / toggle the selected file, `S`/`U` every file listed, `d`
-//! puts it back as HEAD has it behind a typed gate;
+//! puts it back as HEAD has it behind a typed gate, `c` commits what is staged
+//! and `K` shows everything about the file;
 //! Ctrl-↑/↓ (or Ctrl-j/k) scroll the diff. `j`/`k` move the file list and `/` filters it by path. `r` reads
 //! the working tree again, for when a build or another terminal has touched it
-//! since this one opened. `?` lists every key. `q` / `Esc` / `Ctrl-C` quit.
+//! since this one opened. `?` lists every key. `q` / `Ctrl-C` quit, and so does
+//! `Esc` once no `/` filter is kept.
 //!
 //! This is the interactive counterpart to `slu repos` (which is cross-repo).
 
 use crate::git::load::load_blob;
-use crate::git::{GIT_WORDS, git_capture, git_capture_raw, git_run};
+use crate::git::{git_capture, git_capture_raw, git_run, git_words};
 use crate::tui::FRAME;
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::difftool::{DiffTool, run_difftool};
@@ -22,9 +24,9 @@ use crate::tui::input::{
     is_right, is_up, norm_esc, stepped,
 };
 use crate::tui::widgets::{
-    Command, CommandLine, DEL, FILTER_KEYS, FIND, HELP, HelpSection, Modal, NOTE, QUIT, Query,
-    REFRESH, Typed, diff_hscrollbar, diff_scrollbar, key_footer, list_scrollbar, pane_block,
-    scope_tabs, typed_popup,
+    BACK, CREATE, Command, CommandLine, DEL, FILTER_KEYS, FIND, Field, Form, FormKey, HELP,
+    HelpSection, Modal, NOTE, QUIT, Query, REFRESH, Typed, diff_hscrollbar, diff_scrollbar,
+    key_footer, list_scrollbar, pane_block, scope_tabs, typed_popup,
 };
 use crate::tui::{
     clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
@@ -226,6 +228,8 @@ struct App {
     modal: Option<Modal>,
     /// The typed gate `d` opens, owning every key until it is answered.
     discard: Option<Discard>,
+    /// The commit's message, which `c` asks for.
+    form: Option<Form>,
     accel: Accel,
     prepared: RenderedDiff,
     diff: Text<'static>,
@@ -267,6 +271,7 @@ pub fn run(_args: Args) {
         diff_rows: 1,
         modal: None,
         discard: None,
+        form: None,
         accel: Accel::default(),
         prepared: RenderedDiff::default(),
         diff: Text::default(),
@@ -308,7 +313,12 @@ impl App {
         let keep = self.current().map(|e| e.path.clone());
         self.entries = load_status(&self.root);
         self.rescope();
-        if let Some(path) = keep
+        self.settle_on(keep);
+    }
+
+    /// Put the cursor back on `path` once the rows under it have moved.
+    fn settle_on(&mut self, path: Option<String>) {
+        if let Some(path) = path
             && let Some(i) = self
                 .visible
                 .iter()
@@ -321,6 +331,85 @@ impl App {
             self.diff_hscroll = 0;
             self.refresh_diff();
         }
+    }
+
+    /// `esc` on a kept filter: every file of the tab again, the cursor kept
+    /// on its file.
+    fn drop_query(&mut self) {
+        let keep = self.current().map(|e| e.path.clone());
+        self.query.clear();
+        self.rescope();
+        self.settle_on(keep);
+    }
+
+    /// `c`: a form for the commit's message, when something is staged.
+    fn create_commit(&mut self) {
+        if !self.entries.iter().any(Entry::staged) {
+            self.set_failed("nothing staged to commit: s stages a file, S every file");
+            return;
+        }
+        self.form = Some(Form::new(
+            "new commit",
+            vec![Field::new(
+                "message",
+                "what this commit does, one line",
+                true,
+            )],
+        ));
+    }
+
+    /// The form's submit: `git commit` with its message. A refusal (a hook,
+    /// a signing key) leaves the form up under git's words.
+    fn submit_commit(&mut self, terminal: &mut DefaultTerminal) {
+        let Some(form) = &self.form else {
+            return;
+        };
+        let message = form.value(0).to_string();
+        let (ok, out) = git_run(&self.root, &["commit", "-m", &message]);
+        // A signing key's pinentry draws on the terminal and leaves the
+        // alternate screen as it closes, so the screen is set up again whole.
+        if self.enhanced {
+            pop_keyboard_enhancement();
+        }
+        ratatui::restore();
+        *terminal = ratatui::init();
+        if self.enhanced {
+            push_keyboard_enhancement();
+        }
+        let _ = terminal.clear();
+        if !ok {
+            let words = git_words(&out);
+            self.modal = Some(Modal::new("could not commit", words));
+            return;
+        }
+        self.form = None;
+        let short = git_capture(&self.root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+        self.set_status(format!("committed {short} \"{message}\""));
+        self.reload();
+    }
+
+    /// `K`: everything about the file under the cursor that its row has no
+    /// room for, in a reader over the panes.
+    fn inspect(&mut self) {
+        let Some(e) = self.current() else {
+            return;
+        };
+        let row = |key: &str, value: String| (key.to_string(), value);
+        let mut rows = vec![row("path", e.path.clone())];
+        if e.untracked() {
+            rows.push(row("state", "untracked".to_string()));
+        } else {
+            rows.push(row("staged", code_words(e.x).to_string()));
+            rows.push(row("not staged", code_words(e.y).to_string()));
+        }
+        if let Some(orig) = &e.orig {
+            rows.push(row("was", orig.clone()));
+        }
+        if e.hidden > 0 {
+            rows.push(row("inside", format!("{} untracked files", e.hidden)));
+        }
+        let title = format!("file {}", e.base_name());
+        self.modal = Some(Modal::reader(title, &rows));
     }
 
     /// Re-filter for the current scope and query, keep the cursor in range, and
@@ -454,10 +543,10 @@ impl App {
                 false => format!("deleted the changes to {}", entry.base_name()),
             });
         } else {
-            let words: Vec<&str> = out.lines().take(GIT_WORDS).collect();
+            let words = git_words(&out);
             self.modal = Some(Modal::new(
                 format!("could not delete `{}`", entry.base_name()),
-                words.join("\n"),
+                words,
             ));
         }
         self.reload();
@@ -519,6 +608,7 @@ impl App {
                     if is_ctrl_c(code, ctrl) {
                         let open = self.modal.is_some()
                             || self.discard.is_some()
+                            || self.form.is_some()
                             || self.command.is_some()
                             || self.editing;
                         if !open {
@@ -530,6 +620,15 @@ impl App {
                     if let Some(modal) = &mut self.modal {
                         if modal.on_key(code, ctrl) {
                             self.modal = None;
+                        }
+                        continue;
+                    }
+                    // So does the commit's form, under any alert its submit raised.
+                    if let Some(form) = &mut self.form {
+                        match form.on_key(code, key) {
+                            FormKey::Open => {}
+                            FormKey::Cancel => self.form = None,
+                            FormKey::Submit => self.submit_commit(terminal),
                         }
                         continue;
                     }
@@ -591,6 +690,10 @@ impl App {
                     }
                     if code == KeyCode::Char(':') {
                         self.command = Some(CommandLine::default());
+                        continue;
+                    }
+                    if code == KeyCode::Esc && !self.query.text.is_empty() {
+                        self.drop_query();
                         continue;
                     }
                     if matches!(code, KeyCode::Char('q') | KeyCode::Esc) {
@@ -679,6 +782,10 @@ impl App {
             reload = self.on_visible(&["restore", "--staged"], Entry::staged, Entry::to_unstage);
         } else if code == KeyCode::Char(' ') {
             reload = self.toggle();
+        } else if code == KeyCode::Char('c') {
+            self.create_commit();
+        } else if code == KeyCode::Char('K') {
+            self.inspect();
         } else if code == KeyCode::Char('d') {
             self.discard = self.current().map(|e| Discard {
                 entry: e.clone(),
@@ -973,21 +1080,27 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 
     // Every letter but `?` goes into the filter while it is typed, so its footer
     // offers only keys that are not letters.
+    let kept = format!("/{}", app.query.text);
     let (keys, help) = match app.editing {
         true => (FILTER_KEYS.to_vec(), HELP),
-        false => (
-            vec![
+        false => {
+            let mut keys = vec![
                 "↵ difftool",
                 "s stage",
                 "u unstage",
                 "space flip",
+                "K inspect",
+                CREATE,
                 DEL,
                 FIND,
                 REFRESH,
                 QUIT,
-            ],
-            HELP,
-        ),
+            ];
+            if !app.query.text.is_empty() {
+                keys.splice(0..0, [kept.as_str(), BACK]);
+            }
+            (keys, HELP)
+        }
     };
     frame.render_widget(
         key_footer(
@@ -1011,8 +1124,26 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
             "del",
         );
     }
+    if let Some(form) = &app.form {
+        form.draw(frame, panes);
+    }
     if let Some(modal) = &mut app.modal {
         modal.draw(frame, panes);
+    }
+}
+
+/// One column of `git status --porcelain` in words.
+fn code_words(code: char) -> &'static str {
+    match code {
+        ' ' => "nothing",
+        'M' => "modified",
+        'T' => "type changed",
+        'A' => "added",
+        'D' => "deleted",
+        'R' => "renamed",
+        'C' => "copied",
+        'U' => "unmerged",
+        _ => "changed",
     }
 }
 
@@ -1043,6 +1174,7 @@ const HELP_ROWS: &[HelpSection] = &[
             ("space", "flip between the two"),
             ("S", "stage every file the list shows"),
             ("U", "unstage every file the list shows"),
+            ("c", "create a commit from what is staged"),
         ],
     ),
     (
@@ -1056,10 +1188,12 @@ const HELP_ROWS: &[HelpSection] = &[
         "every screen",
         &[
             ("/", "find"),
+            ("K", "inspect the file"),
             ("r", "refresh"),
             (":", "a command (:q quits)"),
             ("?", "this help"),
-            ("q esc", "quit"),
+            ("q", "quit"),
+            ("esc", "drop a kept find, else quit"),
             ("ctrl-c", "quit, or esc in a box or the filter"),
         ],
     ),
@@ -1079,6 +1213,14 @@ const HELP_ROWS: &[HelpSection] = &[
             ("↵", "keep"),
             ("esc", "back"),
             ("?", "help"),
+        ],
+    ),
+    (
+        "in a form",
+        &[
+            ("type", "the commit's message"),
+            ("↵", "commit"),
+            ("esc", "cancel"),
         ],
     ),
     (

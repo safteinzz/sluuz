@@ -1,7 +1,7 @@
 //! The remotes level: every remote of one repo, where the checked-out branch
 //! stands against each, and the branches each one holds.
 
-use super::delete::{Confirm, GIT_WORDS, Target};
+use super::delete::{Confirm, Target, git_words};
 use super::{App, Level};
 use crate::git::git_run;
 use crate::git::load::{self, Remote};
@@ -89,10 +89,10 @@ impl App {
         let branch = self.head.clone().unwrap_or_default();
         if let Err(words) = load::push_branch(&self.repo, remote) {
             self.note = None;
-            let words: Vec<&str> = words.lines().take(GIT_WORDS).collect();
+            let words = git_words(&words);
             self.modal = Some(Modal::new(
                 format!("could not push {branch} to {remote}"),
-                words.join("\n"),
+                words,
             ));
             return;
         }
@@ -109,11 +109,8 @@ impl App {
         };
         if let Err(words) = load::fetch_remote(&self.repo, &name) {
             self.note = None;
-            let words: Vec<&str> = words.lines().take(GIT_WORDS).collect();
-            self.modal = Some(Modal::new(
-                format!("could not sync {name}"),
-                words.join("\n"),
-            ));
+            let words = git_words(&words);
+            self.modal = Some(Modal::new(format!("could not sync {name}"), words));
             return;
         }
         let note = match (&self.head, pull) {
@@ -201,11 +198,8 @@ impl App {
         for args in &steps {
             let (ok, out) = git_run(&self.repo, args);
             if !ok {
-                let words: Vec<&str> = out.lines().take(GIT_WORDS).collect();
-                self.modal = Some(Modal::new(
-                    format!("could not save `{name}`"),
-                    words.join("\n"),
-                ));
+                let words = git_words(&out);
+                self.modal = Some(Modal::new(format!("could not save `{name}`"), words));
                 return;
             }
         }
@@ -233,11 +227,8 @@ impl App {
         };
         let (ok, out) = git_run(&self.repo, &["remote", "remove", name]);
         if !ok {
-            let words: Vec<&str> = out.lines().take(GIT_WORDS).collect();
-            self.modal = Some(Modal::new(
-                format!("could not remove `{name}`"),
-                words.join("\n"),
-            ));
+            let words = git_words(&out);
+            self.modal = Some(Modal::new(format!("could not remove `{name}`"), words));
             return;
         }
         self.set_status(format!("removed {name}"));
