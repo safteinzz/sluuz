@@ -377,8 +377,8 @@ mod tests {
         // Every repo in a tree of mirrors shares the head of this path, so the
         // end is the only part that says which one it is.
         assert_eq!(
-            short_remote("/home/me/projects/sluuz/test-playground/crates/vibox.git"),
-            "…/crates/vibox"
+            short_remote("/home/me/mirrors/team/crates/widget.git"),
+            "…/crates/widget"
         );
         assert_eq!(short_remote("../mirror/repo.git"), "…/mirror/repo");
         // Nothing was dropped here, so there is no ellipsis to earn.

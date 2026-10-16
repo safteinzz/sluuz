@@ -43,7 +43,7 @@ fn haystack(r: &RepoStatus) -> String {
     format!("{} {} {}", r.name, r.branch, r.origin)
 }
 
-/// A repo's path relative to the directory being scanned (`crates/vibox`), or
+/// A repo's path relative to the directory being scanned (`crates/widget`), or
 /// its plain name when it sits directly under it.
 fn relative_name(repo: &Path, base: &Path) -> String {
     repo.strip_prefix(base)
@@ -199,8 +199,8 @@ mod tests {
     #[test]
     fn scanning_the_current_directory_drops_the_dot() {
         assert_eq!(
-            relative_name(Path::new("./crates/vibox"), Path::new(".")),
-            "crates/vibox"
+            relative_name(Path::new("./crates/widget"), Path::new(".")),
+            "crates/widget"
         );
         assert_eq!(
             relative_name(Path::new("./hscroll"), Path::new(".")),
@@ -211,16 +211,16 @@ mod tests {
     #[test]
     fn a_trailing_slash_on_the_root_changes_nothing() {
         assert_eq!(
-            relative_name(Path::new("/pg/crates/vibox"), Path::new("/pg/")),
-            "crates/vibox"
+            relative_name(Path::new("/pg/crates/widget"), Path::new("/pg/")),
+            "crates/widget"
         );
     }
 
     #[test]
     fn a_path_outside_the_root_falls_back_to_its_name() {
         assert_eq!(
-            relative_name(Path::new("/elsewhere/vibox"), Path::new("/pg")),
-            "vibox"
+            relative_name(Path::new("/elsewhere/widget"), Path::new("/pg")),
+            "widget"
         );
     }
 }
