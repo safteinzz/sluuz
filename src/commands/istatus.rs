@@ -4,8 +4,8 @@
 //! (syntax-highlighted, via the shared `tui` renderer). `h`/`l` (or `←`/`→`)
 //! move between the **all**, **staged** and **unstaged** tabs; `s`/`u`/Space
 //! stage / unstage / toggle the selected file, `S`/`U` every file listed, `d`
-//! puts it back as HEAD has it behind a typed gate, `c` commits what is staged
-//! and `K` shows everything about the file;
+//! puts it back as HEAD has it behind a typed gate, `c` commits what is staged,
+//! `e` opens the file in the editor git uses and `K` shows everything about it;
 //! Ctrl-↑/↓ (or Ctrl-j/k) scroll the diff. `j`/`k` move the file list and `/` filters it by path. `r` reads
 //! the working tree again, for when a build or another terminal has touched it
 //! since this one opened. `?` lists every key. `q` / `Ctrl-C` quit, and so does
@@ -17,14 +17,14 @@ use crate::git::load::load_blob;
 use crate::git::{git_capture, git_capture_raw, git_run, git_words};
 use crate::tui::FRAME;
 use crate::tui::difffeed::DiffFeed;
-use crate::tui::difftool::{DiffTool, run_difftool};
+use crate::tui::difftool::{DiffTool, run_difftool, run_editor};
 use crate::tui::highlight::{Blob, DiffContext, RenderedDiff, render_prepared};
 use crate::tui::input::{
     Accel, CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE, is_ctrl_c, is_down, is_help, is_left,
     is_right, is_up, norm_esc, stepped,
 };
 use crate::tui::widgets::{
-    BACK, CREATE, Command, CommandLine, DEL, FILTER_KEYS, FIND, Field, Form, FormKey, HELP,
+    BACK, CREATE, Command, CommandLine, DEL, EDIT, FILTER_KEYS, FIND, Field, Form, FormKey, HELP,
     HelpSection, Modal, NOTE, QUIT, Query, REFRESH, Typed, diff_hscrollbar, diff_scrollbar,
     key_footer, list_scrollbar, pane_block, scope_tabs, typed_popup,
 };
@@ -533,6 +533,29 @@ impl App {
         true // a difftool edit may have changed the file
     }
 
+    /// `e`: open the file under the cursor in the user's editor. Returns whether
+    /// the tree may have changed under it.
+    fn edit(&mut self, terminal: &mut DefaultTerminal) -> bool {
+        let Some(e) = self.current().cloned() else {
+            return false;
+        };
+        if !Path::new(&self.root).join(&e.path).is_file() {
+            self.set_failed(format!(
+                "nothing to edit: `{}` is not a file on disk",
+                e.path
+            ));
+            return false;
+        }
+        let outcome = run_editor(terminal, self.enhanced, &self.root, &e.path);
+        self.width = pane_width(terminal);
+        match outcome {
+            DiffTool::Quiet => {}
+            DiffTool::Note(m) => self.set_failed(m),
+            DiffTool::Failed(modal) => self.modal = Some(modal),
+        }
+        true
+    }
+
     /// `d` let through: put the entry back as HEAD has it, or delete it when
     /// git has no copy, then read the tree again.
     fn discard(&mut self, entry: Entry) {
@@ -786,6 +809,8 @@ impl App {
             self.create_commit();
         } else if code == KeyCode::Char('K') {
             self.inspect();
+        } else if code == KeyCode::Char('e') {
+            reload = self.edit(terminal);
         } else if code == KeyCode::Char('d') {
             self.discard = self.current().map(|e| Discard {
                 entry: e.clone(),
@@ -1091,6 +1116,7 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
                 "space flip",
                 "K inspect",
                 CREATE,
+                EDIT,
                 DEL,
                 FIND,
                 REFRESH,
@@ -1177,6 +1203,7 @@ const HELP_ROWS: &[HelpSection] = &[
             ("c", "create a commit from what is staged"),
         ],
     ),
+    ("edit", &[("e", "open the file in the editor git uses")]),
     (
         "delete",
         &[

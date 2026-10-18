@@ -1,4 +1,5 @@
-//! Handing the terminal to the user's `git difftool` and taking it back.
+//! Handing the terminal to the user's `git difftool`, or their editor, and
+//! taking it back.
 //!
 //! The TUI must be fully torn down first, or an interactive tool like vimdiff
 //! draws into a screen ratatui still owns. That teardown is also why a failure
@@ -9,7 +10,7 @@
 
 use super::suspended;
 use super::widgets::Modal;
-use crate::git::git_capture;
+use crate::git::{git_capture, git_words};
 use ratatui::DefaultTerminal;
 use std::io::{self, Read};
 use std::process::{Command, ExitStatus, Stdio};
@@ -86,7 +87,9 @@ pub fn run_difftool(
         ));
     }
 
-    let outcome = suspended(terminal, enhanced, || handoff(dir, args));
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).arg("difftool").arg("-y").args(args);
+    let outcome = suspended(terminal, enhanced, || handoff(cmd));
     let _ = terminal.clear();
 
     match outcome {
@@ -99,6 +102,7 @@ pub fn run_difftool(
                 Some(c) => c.to_string(),
                 None => "a signal".to_string(),
             };
+            let said = tail(&said);
             if said.is_empty() {
                 // A tool that ran fine and was quit with a non-zero code (vim's
                 // `:cq`) has nothing to explain, so it doesn't get a box.
@@ -114,18 +118,64 @@ pub fn run_difftool(
     }
 }
 
-/// Run the tool with the terminal handed over, keeping a copy of its stderr.
+/// Open `path`, relative to `dir`, in the editor git starts for a commit
+/// message: `git var GIT_EDITOR` picks `$GIT_EDITOR`, `core.editor`,
+/// `$VISUAL`, `$EDITOR`, then git's default. The answer is a shell snippet, so
+/// it runs through `sh` the way git runs it, which a Windows without `sh` on
+/// its PATH reports as an editor that would not start.
+pub fn run_editor(
+    terminal: &mut DefaultTerminal,
+    enhanced: bool,
+    dir: &str,
+    path: &str,
+) -> DiffTool {
+    let Some(editor) = git_capture(dir, &["var", "GIT_EDITOR"]).filter(|e| !e.is_empty()) else {
+        return DiffTool::Failed(Modal::new(
+            "no editor",
+            "`git var GIT_EDITOR` named none: set one with \
+             `git config --global core.editor <editor>`",
+        ));
+    };
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(format!("{editor} \"$@\""))
+        .arg(&editor)
+        .arg(path)
+        .current_dir(dir);
+    let outcome = suspended(terminal, enhanced, || handoff(cmd));
+    let _ = terminal.clear();
+
+    match outcome {
+        Err(_) => DiffTool::Failed(Modal::new(
+            "editor would not start",
+            format!(
+                "`{editor}` runs through `sh`, which could not be started: put `sh` on your PATH"
+            ),
+        )),
+        Ok((status, said)) if !status.success() => {
+            let code = match status.code() {
+                Some(c) => c.to_string(),
+                None => "a signal".to_string(),
+            };
+            let said = git_words(&said);
+            if said.is_empty() {
+                DiffTool::Note(format!("`{editor}` exited with status {code}"))
+            } else {
+                DiffTool::Failed(Modal::new(
+                    "editor failed",
+                    format!("`{editor}` exited with status {code}:\n\n{said}"),
+                ))
+            }
+        }
+        Ok(_) => DiffTool::Quiet,
+    }
+}
+
+/// Run `cmd` with the terminal handed over, keeping a copy of its stderr.
 /// A thread drains the pipe while the tool runs, so a chatty one can't fill it
 /// and hang waiting for someone to read.
-fn handoff(dir: &str, args: &[&str]) -> io::Result<(ExitStatus, String)> {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .arg("difftool")
-        .arg("-y")
-        .args(args)
-        .stderr(Stdio::piped())
-        .spawn()?;
+fn handoff(mut cmd: Command) -> io::Result<(ExitStatus, String)> {
+    let mut child = cmd.stderr(Stdio::piped()).spawn()?;
 
     let mut pipe = child.stderr.take().expect("stderr is piped");
     let drain = std::thread::spawn(move || {
@@ -135,7 +185,7 @@ fn handoff(dir: &str, args: &[&str]) -> io::Result<(ExitStatus, String)> {
     });
     let status = child.wait()?;
     let said = drain.join().unwrap_or_default();
-    Ok((status, tail(&String::from_utf8_lossy(&said))))
+    Ok((status, String::from_utf8_lossy(&said).into_owned()))
 }
 
 /// The tail of what the tool printed: blanks dropped and consecutive repeats
