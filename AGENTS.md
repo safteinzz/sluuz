@@ -43,7 +43,7 @@ Working brief for an AI coding agent, not documentation for people (the README c
 ## Overview
 `sluuz` is a Rust CLI on crates.io that is a **git superset**: the binary is `slu` (a 3-letter stand-in for `git`). Anything git understands is passed straight through to real git; on top, `slu` adds cross-repo management, history/secret search, a prettier log, and interactive TUIs. Crate `sluuz`, binary `slu`, AGPL-3.0-only.
 Layout:
-- `src/main.rs` - the clap `Cmd` enum, `passthrough()`, and the `--help` command list, which is rendered here rather than by clap.
+- `src/main.rs`: the clap `Cmd` enum, `passthrough()`, the `--help` command list, which is rendered here rather than by clap, and `split_leading`, which takes git's options before the command off the line before clap sees it: `-C` is a startup `set_current_dir` (never forwarded too, or a relative path applies twice), the rest go to git as typed and are refused in front of slu's own verbs.
 - `src/git.rs` - repo discovery, `git_capture{,_raw}`/`git_run`, `RepoStatus`, `SEP`, and `git/load.rs` for the queries the interactive views run (they sit here, not under `tui/`, because reading git is not terminal work and a plain command may need the same query).
 - `src/history.rs` - the pickaxe shared by `search`, `scan` and `iscan`.
 - `src/app/` - **the drill**: one `App` with a `Level` stack (`Repos` → `Branches` → `Commits` → `Diff`; the file list is the preview pane at `Commits`, not a level of its own, so three `Enter`s take you from a repo list to a diff), split into `repos`/`remotes`/`branches`/`tags`/`commits`/`stashes`/`diff` state, `keys.rs` for input and `ui.rs` for rendering. `irepos`, `iremote`, `ibranch`, `itag`, `ilog` and `istash` are six entry points into it.

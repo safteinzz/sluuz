@@ -25,7 +25,10 @@ prompts, colors and exit codes intact:
 slu commit -m "fix"
 slu push
 slu rebase -i HEAD~3
+slu --no-pager log -3
 ```
+
+`-C <path>` works as git's does, for slu's own commands too (`slu -C ~/src repos`).
 
 Then come the parts it does not. Each one below is an interactive tool and the
 plain command that prints the same answer, for scripts and pipes.

@@ -104,3 +104,71 @@ fn a_reader_that_stops_early_ends_the_output_quietly() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Runs the built `slu` in `dir` with git's own config files kept out.
+fn slu(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_slu"))
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("run slu")
+}
+
+#[test]
+fn each_dash_c_is_relative_to_the_one_before_and_applied_once() {
+    let dir = TempDir::new("dash-c");
+    let repo = dir.0.join("a").join("b");
+    fs::create_dir_all(&repo).expect("repo dir");
+    let ok = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .expect("run git")
+        .success();
+    assert!(ok, "`git init` failed");
+
+    let out = slu(
+        &dir.0,
+        &["-C", "a", "-C", "b", "rev-parse", "--show-toplevel"],
+    );
+    assert!(
+        out.status.success(),
+        "`slu -C a -C b rev-parse` failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let top = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        fs::canonicalize(top.trim()).expect("toplevel exists"),
+        fs::canonicalize(&repo).expect("repo exists"),
+        "`-C a -C b` did not land in a/b"
+    );
+}
+
+#[test]
+fn git_options_before_the_command_reach_git() {
+    let dir = TempDir::new("git-opts");
+    let out = slu(
+        &dir.0,
+        &[
+            "--no-pager",
+            "-c",
+            "sluuz.probe=yes",
+            "config",
+            "sluuz.probe",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "`slu --no-pager -c … config` failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "yes",
+        "the `-c` value never reached git"
+    );
+}

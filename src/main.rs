@@ -33,7 +33,8 @@ mod git;
 mod history;
 mod tui;
 
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
+use std::ffi::{OsStr, OsString};
 use std::process::Command;
 
 /// Shown at the bottom of `slu --help`: the one shape the command list can't
@@ -42,7 +43,8 @@ use std::process::Command;
 const AFTER: &str = concat!(
     "\
 Ways to run it (not subcommands):
-  slu <git command>   real git, passed straight through (`slu commit -m \"fix\"`, `slu push`)
+  slu <git command>                real git, passed straight through (`slu commit -m \"fix\"`, `slu push`)
+  slu <git options> <git command>  git's options before the command reach git as typed (`slu --no-pager log`)
 
 A passthrough is git itself, so the output and the exit code are git's own.
 sluuz's own verbs print a table for people rather than data, except
@@ -178,6 +180,24 @@ enum Cmd {
 }
 
 fn main() {
+    let (dirs, globals, argv) = split_leading(std::env::args_os().collect());
+    for dir in &dirs {
+        enter(dir);
+    }
+    if !globals.is_empty() {
+        let rest = &argv[1..];
+        if let Some(name) = rest.first().and_then(|a| a.to_str()).filter(|n| is_own(n)) {
+            eprintln!(
+                "slu: `{}` is git's option and `{name}` is slu's own command; run `slu {name}` without it",
+                globals[0].to_string_lossy()
+            );
+            std::process::exit(2);
+        }
+        let mut args = globals;
+        args.extend_from_slice(rest);
+        exit_like_git(&args, rest);
+    }
+
     // The command list is rendered here rather than by clap, which has no way to
     // give one subcommand a different heading from another. Everything in it
     // still comes from clap's own metadata, so it cannot drift from the
@@ -185,7 +205,16 @@ fn main() {
     let mut built = Cli::command();
     built.build();
     let template = help_template(&built);
-    let matches = Cli::command().help_template(template).get_matches();
+    let matches = Cli::command()
+        .help_template(template)
+        .arg(
+            Arg::new("dir")
+                .short('C')
+                .value_name("PATH")
+                .action(ArgAction::Append)
+                .help("Run as if slu was started in PATH; repeated, each is relative to the last"),
+        )
+        .get_matches_from(argv);
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
         Err(e) => e.exit(),
@@ -279,25 +308,90 @@ fn is_interactive(cmd: &clap::Command) -> bool {
     cmd.get_name().starts_with('i')
 }
 
+/// git's options that go before the command, taken off the command line before
+/// clap reads it: the `-C` directories in order, then every other option with
+/// its value, then what is left. Scanning stops at the first word that is not
+/// an option, and at `-h`, `-V` and a `-C` with no directory, which are clap's.
+fn split_leading(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>, Vec<OsString>) {
+    let (mut dirs, mut globals) = (Vec::new(), Vec::new());
+    // Each option found is drained, so the next one is always at 1.
+    while let Some(arg) = argv.get(1).and_then(|a| a.to_str()) {
+        if !arg.starts_with('-') || matches!(arg, "-h" | "--help" | "-V" | "--version") {
+            break;
+        }
+        if arg == "-C" {
+            let Some(dir) = argv.get(2) else { break };
+            // git skips an empty `-C ""`, which scripts lean on.
+            if !dir.is_empty() {
+                dirs.push(dir.clone());
+            }
+            argv.drain(1..3);
+            continue;
+        }
+        let takes_next = matches!(
+            arg,
+            "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--config-env" | "--attr-source"
+        );
+        let end = (2 + usize::from(takes_next)).min(argv.len());
+        globals.extend(argv.drain(1..end));
+    }
+    (dirs, globals, argv)
+}
+
+/// Changes into `dir` the way `git -C` does, exiting with git's code for it when
+/// that fails.
+fn enter(dir: &OsStr) {
+    if let Err(e) = std::env::set_current_dir(dir) {
+        let why = match e.kind() {
+            std::io::ErrorKind::NotFound => "there is no such directory",
+            std::io::ErrorKind::NotADirectory => "it is not a directory",
+            std::io::ErrorKind::PermissionDenied => "permission denied",
+            _ => "it could not be entered",
+        };
+        eprintln!(
+            "slu: cannot run in `{}`: {why}; check the path after `-C`",
+            dir.to_string_lossy()
+        );
+        std::process::exit(128);
+    }
+}
+
+/// Whether `name` is one of slu's own commands rather than git's.
+fn is_own(name: &str) -> bool {
+    Cli::command()
+        .get_subcommands()
+        .any(|c| c.get_name() == name || c.get_all_aliases().any(|a| a == name))
+}
+
 /// Forward to real `git`, inheriting stdio so editors, pagers, prompts, and
 /// colors all work, then exit with git's own status code.
 fn passthrough(args: &[String]) -> ! {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    exit_like_git(&args, &args);
+}
+
+/// Runs git with `args` and exits with its code. `command` is the part of
+/// `args` from git's command word on, without the options before it.
+fn exit_like_git(args: &[OsString], command: &[OsString]) -> ! {
     let code = git_status(args);
     // `git <cmd> --help` hands over to man, which only says "No manual entry"
     // where git's manual is not installed; the usage behind `-h` is built into git.
-    if code != 0 && args.get(1).is_some_and(|a| a == "--help") {
+    if code != 0 && command.get(1).is_some_and(|a| a == "--help") {
         eprintln!(
             "slu: no manual to open, so this is `git {} -h`; install git's man pages for the full one",
-            args[0]
+            command[0].to_string_lossy()
         );
-        std::process::exit(git_status(&[args[0].clone(), "-h".to_string()]));
+        let options = &args[..args.len() - command.len()];
+        let mut usage = options.to_vec();
+        usage.extend([command[0].clone(), OsString::from("-h")]);
+        std::process::exit(git_status(&usage));
     }
     std::process::exit(code);
 }
 
 /// Runs git with our stdio and returns its exit code, exiting 127 when git
 /// cannot be started at all.
-fn git_status(args: &[String]) -> i32 {
+fn git_status(args: &[OsString]) -> i32 {
     match Command::new("git").args(args).status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
