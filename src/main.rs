@@ -282,8 +282,24 @@ fn is_interactive(cmd: &clap::Command) -> bool {
 /// Forward to real `git`, inheriting stdio so editors, pagers, prompts, and
 /// colors all work, then exit with git's own status code.
 fn passthrough(args: &[String]) -> ! {
+    let code = git_status(args);
+    // `git <cmd> --help` hands over to man, which only says "No manual entry"
+    // where git's manual is not installed; the usage behind `-h` is built into git.
+    if code != 0 && args.get(1).is_some_and(|a| a == "--help") {
+        eprintln!(
+            "slu: no manual to open, so this is `git {} -h`; install git's man pages for the full one",
+            args[0]
+        );
+        std::process::exit(git_status(&[args[0].clone(), "-h".to_string()]));
+    }
+    std::process::exit(code);
+}
+
+/// Runs git with our stdio and returns its exit code, exiting 127 when git
+/// cannot be started at all.
+fn git_status(args: &[String]) -> i32 {
     match Command::new("git").args(args).status() {
-        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
             eprintln!("slu: could not run git: {e}");
             std::process::exit(127);
