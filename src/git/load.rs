@@ -4,7 +4,7 @@
 //! Every loader takes the repo to read, so one view can walk several repos in
 //! the same session. `"."` is the current one.
 
-use crate::git::{SEP, git_capture, git_capture_raw};
+use crate::git::{RepoStatus, SEP, git_capture, git_capture_raw};
 use crate::tui::highlight::{Blob, DiffContext};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -47,6 +47,16 @@ pub enum Batch {
     TagBase {
         seq: u64,
         prev: Option<String>,
+    },
+    /// `s` or `S` on the repos level has finished: each repo's name and how many
+    /// commits it pulled, or what git said. One job runs at a time, so no `seq`.
+    Synced {
+        pull: bool,
+        outcomes: Vec<(String, Result<usize, String>)>,
+    },
+    /// A new reading of the whole repo list, which replaces the old one.
+    RepoScan {
+        repos: Vec<RepoStatus>,
     },
 }
 

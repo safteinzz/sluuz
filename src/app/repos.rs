@@ -1,11 +1,16 @@
 //! The repos level: every repo under a path, and picking one to drill into.
 
-use super::App;
-use crate::git::load;
-use crate::git::{RepoStatus, find_repos, first_line, repo_status};
-use crate::tui::widgets::Modal;
+use super::{App, Level};
+use crate::git::load::{self, Batch};
+use crate::git::{
+    Progress, RepoStatus, Stage, find_repos_counting, first_line, repo_status, with_remote_limit,
+};
+use crate::tui::widgets::{Modal, SPINNER};
 use rayon::prelude::*;
 use std::path::Path;
+use std::sync::Arc;
+use std::thread;
+use std::time::Instant;
 
 /// Which slice of the repos the top pane shows.
 #[derive(Clone, Copy, PartialEq)]
@@ -60,23 +65,60 @@ fn relative_name(repo: &Path, base: &Path) -> String {
         })
 }
 
-impl App {
-    /// Find every repo under `base` and read its state. Statuses are read in
-    /// parallel: it is one `git status` per repo, and a tree of them is slow
-    /// enough serially to feel like a hang.
-    pub(super) fn load_repos(&mut self, base: &Path, depth: usize) {
-        let found = find_repos(base, depth);
-        let mut repos: Vec<RepoStatus> = found.par_iter().map(|r| repo_status(r)).collect();
-        // Label each repo by where it sits under the scan root, not by its bare
-        // directory name: a tree of them routinely holds two `work`s, and a
-        // basename alone gives no way to tell which one you are about to open.
-        for (repo, path) in repos.iter_mut().zip(&found) {
-            repo.name = relative_name(path, base);
+/// Find every repo under `base` and read its state. Statuses are read in
+/// parallel: it is one `git status` per repo, and a tree of them is slow enough
+/// serially to feel like a hang.
+pub(super) fn scan(base: &Path, depth: usize, progress: &Progress) -> Vec<RepoStatus> {
+    let found = find_repos_counting(base, depth, progress);
+    progress.counted(found.len());
+    let mut repos: Vec<RepoStatus> = found
+        .par_iter()
+        .map(|r| {
+            let status = repo_status(r);
+            progress.one_done();
+            status
+        })
+        .collect();
+    // Label each repo by where it sits under the scan root, not by its bare
+    // directory name: a tree of them routinely holds two `work`s, and a
+    // basename alone gives no way to tell which one you are about to open.
+    for (repo, path) in repos.iter_mut().zip(&found) {
+        repo.name = relative_name(path, base);
+    }
+    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    repos
+}
+
+/// A job over the whole repo list running off the input thread, so the list
+/// stays usable and the footer can say how far it has got.
+pub(super) struct RepoJob {
+    verb: &'static str,
+    progress: Arc<Progress>,
+    since: Instant,
+}
+
+impl RepoJob {
+    fn new(verb: &'static str, progress: Arc<Progress>) -> RepoJob {
+        RepoJob {
+            verb,
+            progress,
+            since: Instant::now(),
         }
-        repos.sort_by(|a, b| a.name.cmp(&b.name));
-        self.repos = repos;
     }
 
+    /// The job as one footer entry. The mark keeps moving while no repo is
+    /// finishing, which is what tells a slow server from a hung app.
+    pub(super) fn line(&self) -> String {
+        let at = self.since.elapsed().as_millis() / 80;
+        let mark = SPINNER[at as usize % SPINNER.len()];
+        match self.progress.stage() {
+            Stage::Finding(found) => format!("{mark} finding repos {found}"),
+            Stage::Working(done, total) => format!("{mark} {} {done}/{total}", self.verb),
+        }
+    }
+}
+
+impl App {
     pub(super) fn rescope_repos(&mut self) {
         let scope = SCOPES[self.rsel.scope];
         let query = &self.rsel.query;
@@ -95,30 +137,79 @@ impl App {
         }
     }
 
-    /// `s`/`S` on the repos level: what `slu sync [--pull]` does, for every
-    /// repo the list is showing, all at once. A fetch can take seconds per
-    /// repo, so doing them one after another would make six repos a wait.
+    /// Read the repo list again in the background; `take_scan` lands the result.
+    /// Does nothing while a job is already running, since one ends in this read.
+    pub(super) fn read_repos(&mut self) {
+        if self.repo_job.is_some() {
+            return;
+        }
+        let progress = Arc::new(Progress::default());
+        self.repo_job = Some(RepoJob::new("reading", progress.clone()));
+        let (base, depth, tx) = (self.base.clone(), self.depth, self.tx.clone());
+        thread::spawn(move || {
+            let repos = scan(&base, depth, &progress);
+            let _ = tx.send(Batch::RepoScan { repos });
+        });
+    }
+
+    /// Swap in a finished read, with the cursor on the repo it is on now rather
+    /// than the one it was on when the read started.
+    pub(super) fn take_scan(&mut self, repos: Vec<RepoStatus>) {
+        self.repo_job = None;
+        let keep = self.rsel.idx().map(|i| self.repos[i].path.clone());
+        self.repos = repos;
+        self.rsel.restore = keep;
+        self.rescope_repos();
+        if self.level == Level::Repos {
+            self.pending = true;
+        }
+    }
+
+    /// `s`/`S` on the repos level: what `slu sync [--pull]` does, for every repo
+    /// the list is showing, in the background. `finish_sync` lands the result.
+    /// Does nothing while a job is already running.
     pub(super) fn sync_all(&mut self, pull: bool) {
+        if self.repo_job.is_some() {
+            return;
+        }
         let repos: Vec<(String, String)> = self
             .rsel
             .visible
             .iter()
             .map(|&i| (self.repos[i].name.clone(), self.repos[i].path.clone()))
             .collect();
-        let outcomes: Vec<(String, Result<usize, String>)> = repos
-            .par_iter()
-            .map(|(name, path)| {
-                let done = load::fetch_prune(path).and_then(|()| {
-                    if pull {
-                        load::fast_forward(path).map(|n| n.unwrap_or(0))
-                    } else {
-                        Ok(0)
-                    }
-                });
-                (name.clone(), done)
-            })
-            .collect();
+        let progress = Arc::new(Progress::of(repos.len()));
+        let verb = if pull { "pulling" } else { "syncing" };
+        self.repo_job = Some(RepoJob::new(verb, progress.clone()));
+        self.note = None;
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let outcomes = with_remote_limit(|| {
+                repos
+                    .par_iter()
+                    .map(|(name, path)| {
+                        let done = load::fetch_prune(path).and_then(|()| {
+                            if pull {
+                                load::fast_forward(path).map(|n| n.unwrap_or(0))
+                            } else {
+                                Ok(0)
+                            }
+                        });
+                        progress.one_done();
+                        (name.clone(), done)
+                    })
+                    .collect()
+            });
+            let _ = tx.send(Batch::Synced { pull, outcomes });
+        });
+    }
 
+    /// Say how a sync went, then read the list again to show what it changed.
+    pub(super) fn finish_sync(
+        &mut self,
+        pull: bool,
+        outcomes: Vec<(String, Result<usize, String>)>,
+    ) {
         let failed: Vec<String> = outcomes
             .iter()
             .filter_map(|(name, r)| {
@@ -144,18 +235,13 @@ impl App {
             self.set_status(text);
         } else {
             self.note = None;
-            self.modal = Some(Modal::new(
+            self.held_alert = Some(Modal::new(
                 format!("{} of {} repos did not sync", failed.len(), outcomes.len()),
                 failed.join("\n"),
             ));
         }
-
-        let keep = self.rsel.idx().map(|i| self.repos[i].path.clone());
-        let (base, depth) = (self.base.clone(), self.depth);
-        self.load_repos(&base, depth);
-        self.rsel.restore = keep;
-        self.rescope_repos();
-        self.pending = true;
+        self.repo_job = None;
+        self.read_repos();
     }
 
     /// Point the app at the selected repo and load its branches, which are what

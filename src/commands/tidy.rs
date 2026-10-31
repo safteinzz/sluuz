@@ -13,6 +13,7 @@
 use crate::git::load;
 use crate::git::{
     SEP, display_name, first_line, git_capture, git_run, prunes_on_fetch, repos_or_exit,
+    with_remote_limit,
 };
 use colored::Colorize;
 use rayon::prelude::*;
@@ -192,14 +193,16 @@ pub fn run(args: Args) {
 /// its ref list, but only the fetch also drags objects down with it, and
 /// updating the repo is `slu sync`'s job rather than this report's.
 fn prune_all(repos: &[PathBuf]) -> Vec<(String, String)> {
-    repos
-        .par_iter()
-        .filter_map(|repo| {
-            let repo_str = repo.to_str()?;
-            let failure = prune(repo_str)?;
-            Some((display_name(repo), failure))
-        })
-        .collect()
+    with_remote_limit(|| {
+        repos
+            .par_iter()
+            .filter_map(|repo| {
+                let repo_str = repo.to_str()?;
+                let failure = prune(repo_str)?;
+                Some((display_name(repo), failure))
+            })
+            .collect()
+    })
 }
 
 /// Prune every remote this repo has, stopping at the first that fails. None

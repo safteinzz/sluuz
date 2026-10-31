@@ -185,10 +185,14 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     }
     // Every letter but `?` goes into a filter being typed, so its footer offers
     // only keys that are not letters.
-    let (keys, help) = match app.editing {
+    let (mut keys, help): (Vec<&str>, _) = match app.editing {
         Some(_) => (FILTER_KEYS.to_vec(), HELP),
         None => (actions(app), HELP),
     };
+    let job = app.repo_job.as_ref().map(|job| job.line());
+    if let Some(job) = &job {
+        keys.insert(0, job);
+    }
     frame.render_widget(
         key_footer(
             &keys,

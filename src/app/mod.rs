@@ -26,8 +26,8 @@ mod ui;
 
 pub use branches::Branch;
 
-use crate::git::RepoStatus;
 use crate::git::load::{self, Batch, Commit, FileEntry, Remote, RemoteTags, Tag};
+use crate::git::{Progress, RepoStatus};
 use crate::tui::difffeed::DiffFeed;
 use crate::tui::highlight::RenderedDiff;
 use crate::tui::input::{Accel, stepped};
@@ -261,9 +261,12 @@ pub struct App {
     modal: Option<Modal>,
     /// A `d` waiting on Yes or No, which owns every key the same way.
     confirm: Option<delete::Confirm>,
-    /// `s` or `S` was pressed (`Some(pull)`). The sync runs after the frame
-    /// that says so is drawn, or the screen would freeze for a network round
-    /// trip with no word why.
+    /// A failure a background job came to, waiting for `modal` to be free so it
+    /// never replaces a box that is still being read.
+    held_alert: Option<Modal>,
+    /// `s` or `S` was pressed on one repo (`Some(pull)`). The sync runs after the
+    /// frame that says so is drawn, or the screen would freeze for a network
+    /// round trip with no word why.
     sync_next: Option<bool>,
     /// A delete on a remote waiting for the same frame, for the same reason.
     delete_next: Option<delete::Target>,
@@ -292,6 +295,8 @@ pub struct App {
     // ── repos level ─────────────────────────────────────────────────────────
     repos: Vec<RepoStatus>,
     rsel: Sel,
+    /// The sync or read of the whole list that is running, if any.
+    repo_job: Option<repos::RepoJob>,
 
     /// The repo every git call runs against. `"."` when the app was entered
     /// inside one repo rather than over a tree of them.
@@ -378,6 +383,7 @@ impl App {
             diff_rows: 1,
             modal: None,
             confirm: None,
+            held_alert: None,
             sync_next: None,
             delete_next: None,
             push_next: None,
@@ -391,6 +397,7 @@ impl App {
             rx,
             repos: Vec::new(),
             rsel: Sel::scoped(repos::DEFAULT_SCOPE),
+            repo_job: None,
             repo,
             base: PathBuf::from("."),
             depth: 0,
@@ -432,13 +439,14 @@ impl App {
     }
 
     /// `slu irepos`: every repo under `base`, previewing the selected one's
-    /// branches. Returns None when the tree holds no repos at all.
-    pub fn at_repos(base: &Path, depth: usize, scope: usize) -> Option<App> {
+    /// branches, telling `progress` how the first read goes. Returns None when
+    /// the tree holds no repos at all.
+    pub fn at_repos(base: &Path, depth: usize, scope: usize, progress: &Progress) -> Option<App> {
         let mut app = App::new(Level::Repos, ".".to_string());
         app.rsel.scope = scope;
         app.base = base.to_path_buf();
         app.depth = depth;
-        app.load_repos(base, depth);
+        app.repos = repos::scan(base, depth, progress);
         if app.repos.is_empty() {
             return None;
         }
@@ -552,7 +560,6 @@ impl App {
             terminal.draw(|frame| ui::draw(frame, self))?;
             if let Some(pull) = self.sync_next.take() {
                 match self.level {
-                    Level::Repos => self.sync_all(pull),
                     Level::Remotes => self.sync_remote(pull),
                     _ => self.sync(pull),
                 }
@@ -626,7 +633,8 @@ impl App {
     /// Is any pane still being streamed into? While one is, the loop comes back
     /// on a frame timer to show what has arrived.
     fn filling(&self) -> bool {
-        self.bfeed.loading
+        self.repo_job.is_some()
+            || self.bfeed.loading
             || self.rfeed.loading
             || self.cfeed.loading
             || self.ffeed.loading
@@ -688,7 +696,12 @@ impl App {
                     self.rfeed.loading = false;
                     self.apply_remote(answer);
                 }
+                Batch::Synced { pull, outcomes } => self.finish_sync(pull, outcomes),
+                Batch::RepoScan { repos } => self.take_scan(repos),
             }
+        }
+        if self.modal.is_none() {
+            self.modal = self.held_alert.take();
         }
         if let Some(prepared) = self.dfeed.take() {
             self.prepared = prepared;
@@ -784,14 +797,7 @@ impl App {
         self.unpushed_for.clear();
         self.files_for.clear();
         match self.level {
-            Level::Repos => {
-                let keep = self.rsel.idx().map(|i| self.repos[i].path.clone());
-                let (base, depth) = (self.base.clone(), self.depth);
-                self.load_repos(&base, depth);
-                self.rsel.restore = keep;
-                self.rescope_repos();
-                self.pending = true;
-            }
+            Level::Repos => self.read_repos(),
             Level::Remotes => {
                 let keep = self.remote().map(|r| r.name.clone());
                 self.reread_remotes(keep);

@@ -8,11 +8,76 @@ pub mod load;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
 /// ASCII unit separator - a field delimiter that won't appear in git's output,
 /// so `--format` strings can split on it without quoting anything.
 pub const SEP: char = '\u{1f}';
+
+/// The most network calls `with_remote_limit` lets run at once. Repos in one
+/// tree usually share a server, and sshd's default `MaxStartups 10:30:100` starts
+/// resetting connections at 10 logins still in progress.
+const REMOTE_JOBS: usize = 8;
+
+/// Run `work` with its rayon iterators limited to `REMOTE_JOBS` at a time. Wrap
+/// anything that opens one connection per repo, and nothing that stays on disk.
+pub fn with_remote_limit<R: Send>(work: impl FnOnce() -> R + Send) -> R {
+    let jobs = rayon::current_num_threads().min(REMOTE_JOBS);
+    match rayon::ThreadPoolBuilder::new().num_threads(jobs).build() {
+        Ok(pool) => pool.install(work),
+        Err(_) => work(),
+    }
+}
+
+/// How far a job over a tree of repos has got: its workers write it and whatever
+/// draws it reads it.
+#[derive(Default)]
+pub struct Progress {
+    total: AtomicUsize,
+    done: AtomicUsize,
+    counted: AtomicBool,
+}
+
+/// What a `Progress` can say right now.
+pub enum Stage {
+    /// Still walking the tree, with this many repos found so far.
+    Finding(usize),
+    /// `.0` of `.1` repos are finished.
+    Working(usize, usize),
+}
+
+impl Progress {
+    /// A job whose repos are already known, so it skips `Stage::Finding`.
+    pub fn of(total: usize) -> Progress {
+        let progress = Progress::default();
+        progress.counted(total);
+        progress
+    }
+
+    pub fn found_one(&self) {
+        self.total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The walk is over and this is the final count.
+    pub fn counted(&self, total: usize) {
+        self.total.store(total, Ordering::Relaxed);
+        self.counted.store(true, Ordering::Relaxed);
+    }
+
+    pub fn one_done(&self) {
+        self.done.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn stage(&self) -> Stage {
+        let total = self.total.load(Ordering::Relaxed);
+        if self.counted.load(Ordering::Relaxed) {
+            Stage::Working(self.done.load(Ordering::Relaxed), total)
+        } else {
+            Stage::Finding(total)
+        }
+    }
+}
 
 /// Find all git repositories under `base`, searching up to `max_depth` levels deep.
 /// Returns each repo's root directory (the parent of its `.git`, which is a file
@@ -20,12 +85,19 @@ pub const SEP: char = '\u{1f}';
 /// repo, that repo is the answer, so running from one of its subfolders still
 /// finds it.
 pub fn find_repos(base: &Path, max_depth: usize) -> Vec<PathBuf> {
+    find_repos_counting(base, max_depth, &Progress::default())
+}
+
+/// `find_repos` that tells `progress` about each repo as the walk reaches it.
+/// The caller still has to call `Progress::counted` with the final number.
+pub fn find_repos_counting(base: &Path, max_depth: usize, progress: &Progress) -> Vec<PathBuf> {
     let found: Vec<PathBuf> = WalkDir::new(base)
         .max_depth(max_depth)
         .follow_links(false)
         .into_iter()
         .filter_map(|entry| entry.ok()) // skip permission errors
         .filter(|entry| entry.file_name() == ".git")
+        .inspect(|_| progress.found_one())
         .filter_map(|entry| entry.path().parent().map(Path::to_path_buf))
         .collect();
     if !found.is_empty() {

@@ -172,3 +172,70 @@ fn git_options_before_the_command_reach_git() {
         "the `-c` value never reached git"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn sync_never_runs_more_than_eight_fetches_at_once() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new("fetches");
+    let (bin, running, log, tree) = (
+        dir.0.join("bin"),
+        dir.0.join("running"),
+        dir.0.join("log"),
+        dir.0.join("tree"),
+    );
+    fs::create_dir_all(&bin).expect("bin dir");
+    fs::create_dir_all(&running).expect("running dir");
+    // A stand-in for git that notes how many fetches are in flight as it joins them.
+    let fake_git = format!(
+        "#!/bin/sh\n\
+         case \" $* \" in *\" fetch \"*) ;; *) exit 0 ;; esac\n\
+         : > '{running}/'$$\n\
+         ls '{running}' | wc -l >> '{log}'\n\
+         sleep 0.2\n\
+         rm -f '{running}/'$$\n",
+        running = running.display(),
+        log = log.display(),
+    );
+    let git = bin.join("git");
+    fs::write(&git, fake_git).expect("write the fake git");
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).expect("make it runnable");
+
+    const REPOS: usize = 24;
+    for i in 0..REPOS {
+        fs::create_dir_all(tree.join(format!("r{i}/.git"))).expect("repo dir");
+    }
+
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").expect("PATH is set")
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_slu"))
+        .arg("sync")
+        .arg(&tree)
+        .env("PATH", path)
+        // More threads than repos, so a lost limit shows on a machine of any size.
+        .env("RAYON_NUM_THREADS", "32")
+        .output()
+        .expect("run slu");
+    assert!(
+        out.status.success(),
+        "`slu sync` failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let seen: Vec<usize> = fs::read_to_string(&log)
+        .expect("the fake git was never asked to fetch")
+        .lines()
+        .map(|l| l.trim().parse().expect("a count"))
+        .collect();
+    assert_eq!(seen.len(), REPOS, "every repo gets exactly one fetch");
+    let most = seen.iter().copied().max().unwrap_or(0);
+    assert!(
+        most <= 8,
+        "{most} fetches ran at once, which is how a server's MaxStartups gets tripped"
+    );
+    assert!(most > 1, "the fetches ran one at a time, so a tree is slow");
+}

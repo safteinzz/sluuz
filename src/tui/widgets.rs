@@ -352,6 +352,9 @@ fn word_end(chars: &[char], mut at: usize) -> usize {
     at
 }
 
+/// The frames of the mark beside something still running.
+pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 /// The row under a view: the keys it answers to, or for `NOTE` what the last
 /// action came to, green when it worked and yellow when it did not, or the `:`
 /// line while one is open. Keys live here rather than on pane borders, which

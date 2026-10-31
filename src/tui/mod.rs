@@ -11,6 +11,7 @@
 /// block on the key instead, so an idle TUI costs nothing.
 pub const FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
+pub mod boot;
 pub mod difffeed;
 pub mod difftool;
 pub mod highlight;

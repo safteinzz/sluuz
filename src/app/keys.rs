@@ -189,13 +189,7 @@ fn query_key(app: &mut App, pane: Pane, code: KeyCode, key: KeyEvent) {
 /// Repos on top, the selected repo's branches below.
 fn repos_key(app: &mut App, code: KeyCode, ctrl: bool, steps: usize) -> bool {
     if !ctrl && matches!(code, KeyCode::Char('s' | 'S')) {
-        let pull = code == KeyCode::Char('S');
-        app.set_status(if pull {
-            "pulling every repo…"
-        } else {
-            "syncing every repo…"
-        });
-        app.sync_next = Some(pull);
+        app.sync_all(code == KeyCode::Char('S'));
         return false;
     }
     if ctrl && (is_down(code) || is_up(code)) {

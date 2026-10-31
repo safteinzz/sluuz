@@ -6,7 +6,7 @@
 //! the current branch when it safely can and refuses (rather than merging) when
 //! it can't - so it can't create merge commits or conflicts.
 
-use crate::git::{display_name, first_line, git_run, repos_or_exit};
+use crate::git::{display_name, first_line, git_run, repos_or_exit, with_remote_limit};
 use colored::Colorize;
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -52,14 +52,16 @@ pub fn run(args: Args) {
         repos.len()
     );
 
-    let mut outcomes: Vec<Outcome> = repos
-        .par_iter()
-        .filter_map(|repo| {
-            let name = display_name(repo);
-            let repo_str = repo.to_str()?;
-            Some(process(name, repo_str, args.pull))
-        })
-        .collect();
+    let mut outcomes: Vec<Outcome> = with_remote_limit(|| {
+        repos
+            .par_iter()
+            .filter_map(|repo| {
+                let name = display_name(repo);
+                let repo_str = repo.to_str()?;
+                Some(process(name, repo_str, args.pull))
+            })
+            .collect()
+    });
 
     outcomes.sort_by(|a, b| a.name.cmp(&b.name));
 

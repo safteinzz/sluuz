@@ -8,6 +8,7 @@
 
 use crate::app::{App, repo_scope};
 use crate::git::no_repos;
+use crate::tui::boot;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
@@ -32,7 +33,10 @@ pub fn run(args: Args) {
         return;
     }
 
-    match App::at_repos(&args.path, args.depth, repo_scope(args.dirty)) {
+    let app = boot::while_loading(|progress| {
+        App::at_repos(&args.path, args.depth, repo_scope(args.dirty), progress)
+    });
+    match app {
         Some(app) => app.run("irepos"),
         None => {
             eprintln!("{}", no_repos(&args.path, args.depth));
