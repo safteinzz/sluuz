@@ -16,6 +16,10 @@ categories = ["command-line-utilities", "development-tools"]
 # never needed to build or run the crate.
 exclude = ["readme-assets/", "legacy/", "demo/"]
 
+# The programs slu starts, for tools that ask what an install needs beside its libraries.
+[package.metadata]
+runs = ["git"]
+
 # The crate is `sluuz`, but the command you type is the shorter `slu`.
 [[bin]]
 name = "slu"
