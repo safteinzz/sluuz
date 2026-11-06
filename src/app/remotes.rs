@@ -134,10 +134,10 @@ impl App {
         };
         match note {
             Ok(text) => self.set_status(text),
-            Err(words) => self.set_failed(format!(
-                "fetched, but not pulled: {}",
-                crate::git::first_line(&words)
-            )),
+            Err(words) => {
+                self.note = None;
+                self.modal = Some(Modal::new("fetched, but not pulled", git_words(&words)));
+            }
         }
         self.reread_remotes(Some(name));
     }

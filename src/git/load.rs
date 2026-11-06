@@ -800,6 +800,9 @@ pub fn fast_forward(repo: &str) -> Result<Option<usize>, String> {
 /// its upstream and `iremote` with the same branch on another remote, such as
 /// the `upstream` of a fork. Ok carries how many commits it moved by.
 pub fn fast_forward_to(repo: &str, rev: &str) -> Result<usize, String> {
+    if let Some(why) = diverged(repo, rev) {
+        return Err(why);
+    }
     let before = git_capture(repo, &["rev-parse", "HEAD"]).unwrap_or_default();
     let (ok, out) = crate::git::git_run(repo, &["merge", "--ff-only", "--quiet", rev]);
     if !ok {
@@ -813,6 +816,33 @@ pub fn fast_forward_to(repo: &str, rev: &str) -> Result<usize, String> {
             .and_then(|n| n.parse().ok())
             .unwrap_or(0),
     )
+}
+
+/// Why HEAD cannot fast-forward to `rev` when both have commits the other
+/// lacks, with the two ways out, since git's own refusal names neither the
+/// counts nor what to run.
+fn diverged(repo: &str, rev: &str) -> Option<String> {
+    let counts = git_capture(
+        repo,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("HEAD...{rev}"),
+        ],
+    )?;
+    let (ahead, behind) = counts.split_once(char::is_whitespace)?;
+    let (ahead, behind): (usize, usize) = (ahead.trim().parse().ok()?, behind.trim().parse().ok()?);
+    if ahead == 0 || behind == 0 {
+        return None;
+    }
+    let name =
+        git_capture(repo, &["rev-parse", "--abbrev-ref", rev]).unwrap_or_else(|| rev.to_string());
+    let s = |n: usize| if n == 1 { "" } else { "s" };
+    Some(format!(
+        "{ahead} commit{} of its own and {behind} new on `{name}`, so it cannot fast-forward: `slu rebase {name}` puts yours on top, `slu reset --hard {name}` drops yours",
+        s(ahead),
+    ))
 }
 
 /// `git fetch --prune <remote>`, the one-remote `fetch_prune`.

@@ -489,12 +489,10 @@ impl App {
         };
         match note {
             Ok(text) => self.set_status(text),
-            // A branch with commits of its own cannot fast-forward: git's own
-            // line says so, and the fetch above still happened.
-            Err(words) => self.set_failed(format!(
-                "fetched, but not pulled: {}",
-                crate::git::first_line(&words)
-            )),
+            Err(words) => {
+                self.note = None;
+                self.modal = Some(Modal::new("fetched, but not pulled", git_words(&words)));
+            }
         }
         // A pull can move the push state of every commit on screen.
         self.unpushed_for.clear();

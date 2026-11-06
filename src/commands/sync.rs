@@ -2,9 +2,9 @@
 //! parallel.
 //!
 //! By default it only fetches + prunes, which never touches your working tree.
-//! With `--pull` it additionally runs `git pull --ff-only`, which fast-forwards
-//! the current branch when it safely can and refuses (rather than merging) when
-//! it can't - so it can't create merge commits or conflicts.
+//! With `--pull` it also fast-forwards the current branch to its upstream
+//! (`load::fast_forward`), which refuses rather than merging, so it can never
+//! create a merge commit or a conflict.
 
 use crate::git::{display_name, first_line, git_run, repos_or_exit, with_remote_limit};
 use colored::Colorize;
@@ -21,7 +21,7 @@ pub struct Args {
     #[arg(short, long, default_value_t = 3)]
     pub depth: usize,
 
-    /// After fetching, fast-forward the current branch (git pull --ff-only)
+    /// After fetching, fast-forward the current branch (git merge --ff-only)
     #[arg(long)]
     pub pull: bool,
 }
@@ -113,33 +113,12 @@ fn process(name: String, repo: &str, pull: bool) -> Outcome {
         };
     }
 
-    // --pull: try a fast-forward-only pull.
-    let (pulled, pout) = git_run(repo, &["pull", "--ff-only"]);
-    if pulled {
-        let note = if pout.contains("Already up to date") {
-            "up to date"
-        } else {
-            "fast-forwarded"
-        };
-        return Outcome {
-            name,
-            state: State::Ok,
-            note: note.to_string(),
-        };
-    }
-
-    // A missing upstream isn't a failure - there's just nothing to pull.
-    if pout.contains("no tracking information") {
-        return Outcome {
-            name,
-            state: State::Skip,
-            note: "fetched, no upstream to pull".to_string(),
-        };
-    }
-
-    Outcome {
-        name,
-        state: State::Fail,
-        note: first_line(&pout),
-    }
+    let (state, note) = match crate::git::load::fast_forward(repo) {
+        Ok(Some(0)) => (State::Ok, "up to date".to_string()),
+        Ok(Some(_)) => (State::Ok, "fast-forwarded".to_string()),
+        // A missing upstream isn't a failure - there's just nothing to pull.
+        Ok(None) => (State::Skip, "fetched, no upstream to pull".to_string()),
+        Err(words) => (State::Fail, first_line(&words)),
+    };
+    Outcome { name, state, note }
 }
