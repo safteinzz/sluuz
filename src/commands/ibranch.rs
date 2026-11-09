@@ -30,7 +30,7 @@ pub fn run(args: Args) {
         eprintln!(
             "slu ibranch needs an interactive terminal - use `slu tidy` / `git branch` instead"
         );
-        return;
+        std::process::exit(1);
     }
 
     // Anchor at the repo root: git reports file paths root-relative, so a diff
@@ -40,6 +40,9 @@ pub fn run(args: Args) {
 
     match App::at_branches(repo, branch_scope(args.gone, args.remotes)) {
         Some(app) => app.run("ibranch"),
-        None => eprintln!("no branches (or not a git repo)"),
+        None => {
+            eprintln!("no branches (or not a git repo)");
+            std::process::exit(1);
+        }
     }
 }

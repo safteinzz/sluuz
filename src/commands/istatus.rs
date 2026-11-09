@@ -241,7 +241,7 @@ struct App {
 pub fn run(_args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu istatus needs an interactive terminal - use `git status` instead");
-        return;
+        std::process::exit(1);
     }
     // Anchor every git call at the repo root. `git status` reports paths
     // relative to the root, so if we ran diff/add from a subdirectory the
@@ -250,7 +250,7 @@ pub fn run(_args: Args) {
         Some(r) if !r.is_empty() => r,
         _ => {
             eprintln!("slu istatus: not inside a git repository");
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -292,6 +292,7 @@ pub fn run(_args: Args) {
 
     if let Err(e) = result {
         eprintln!("slu istatus: {e}");
+        std::process::exit(1);
     }
 }
 

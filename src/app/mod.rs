@@ -544,6 +544,7 @@ impl App {
 
         if let Err(e) = result {
             eprintln!("slu {cmd}: {e}");
+            std::process::exit(1);
         }
     }
 

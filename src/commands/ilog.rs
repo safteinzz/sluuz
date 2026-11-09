@@ -29,7 +29,7 @@ pub struct Args {
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu ilog needs an interactive terminal - use `slu trace` for plain output");
-        return;
+        std::process::exit(1);
     }
 
     // The user typed their paths relative to the cwd, but git runs against the
@@ -51,7 +51,10 @@ pub fn run(args: Args) {
 
     match App::at_commits(repo, log_args, args.number, paths) {
         Some(app) => app.run("ilog"),
-        None => eprintln!("no commits (or not a git repo)"),
+        None => {
+            eprintln!("no commits (or not a git repo)");
+            std::process::exit(1);
+        }
     }
 }
 

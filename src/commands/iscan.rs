@@ -135,7 +135,7 @@ struct App {
 pub fn run(args: Args) {
     if !io::stdout().is_terminal() {
         eprintln!("slu iscan needs an interactive terminal - use `slu scan` for plain output");
-        return;
+        std::process::exit(1);
     }
 
     let mut app = App {
@@ -176,6 +176,7 @@ pub fn run(args: Args) {
 
     if let Err(e) = result {
         eprintln!("slu iscan: {e}");
+        std::process::exit(1);
     }
 }
 
