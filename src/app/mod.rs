@@ -341,9 +341,17 @@ pub struct App {
     /// Which repo `unpushed` was read from, so walking a tree of them reloads
     /// it exactly once per repo instead of once per keypress.
     unpushed_for: String,
-    /// What to pass `git log`: the entry command's flags, or a branch name once
-    /// one is picked at the branches level.
+    /// What `upstream` has and `log_branch` does not, read with every log.
+    incoming: HashSet<String>,
+    /// `log_branch`'s upstream (`origin/main`), empty while none is known.
+    upstream: String,
+    /// What to pass `git log`: `HEAD` and the entry command's flags, or a
+    /// branch name once one is picked at the branches level.
     log_args: Vec<String>,
+    /// The local branch `log_args` walks, whose upstream is walked with it so
+    /// what a pull would bring in is on screen: `HEAD` under `ilog`, the
+    /// picked branch when its row reads behind, None for anything else.
+    log_branch: Option<String>,
     limit: usize,
     /// Pathspec from `slu ilog <path…>`: filters both the log and each commit's
     /// file list, so a path-filtered log shows only that file's change.
@@ -421,7 +429,10 @@ impl App {
             cfeed: Feed::default(),
             unpushed: HashSet::new(),
             unpushed_for: String::new(),
+            incoming: HashSet::new(),
+            upstream: String::new(),
             log_args: Vec::new(),
+            log_branch: None,
             limit: COMMITS_PER_BRANCH,
             paths: Vec::new(),
             stashes: false,
@@ -503,7 +514,14 @@ impl App {
         paths: Vec<String>,
     ) -> Option<App> {
         let mut app = App::new(Level::Commits, repo);
-        app.log_args = log_args;
+        app.log_args = std::iter::once("HEAD".to_string())
+            .chain(log_args)
+            .collect();
+        // Without `--`, git refuses `HEAD` in a repo with a file called HEAD.
+        if !app.log_args.iter().any(|a| a == "--") {
+            app.log_args.push("--".to_string());
+        }
+        app.log_branch = Some("HEAD".to_string());
         app.limit = limit;
         app.paths = paths;
         app.ensure_unpushed();
@@ -689,6 +707,17 @@ impl App {
                         continue;
                     }
                     self.since = prev.map_or(tags::Since::Start, tags::Since::Tag);
+                }
+                Batch::Incoming {
+                    seq,
+                    upstream,
+                    hashes,
+                } => {
+                    if !self.cfeed.accepts(seq) {
+                        continue;
+                    }
+                    self.upstream = upstream;
+                    self.incoming = hashes;
                 }
                 Batch::RemoteTags { seq, answer } => {
                     if !self.rfeed.accepts(seq) {
@@ -982,6 +1011,19 @@ mod tests {
         assert!(
             app.unpushed.contains(&fresh),
             "a refresh has to read the push state again, not trust the cached one"
+        );
+    }
+
+    #[test]
+    fn ilog_opens_in_a_repo_with_a_file_called_head() {
+        // git refuses a revision that is also a file name unless `--` follows
+        // it, and `ilog` names HEAD to walk it with its upstream.
+        let stage = Stage::new();
+        fs::write(PathBuf::from(stage.work()).join("HEAD"), "x").expect("write HEAD");
+        let app = App::at_commits(stage.work(), Vec::new(), 200, Vec::new());
+        assert!(
+            app.is_some(),
+            "a file called HEAD made ilog report a repo with commits as empty"
         );
     }
 

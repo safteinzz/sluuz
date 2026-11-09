@@ -7,9 +7,9 @@ use crate::git::RepoStatus;
 use crate::git::load::{Remote, RemoteTags, Tag, TagState};
 use crate::tui::input::{CTRL_X_MOVE, CTRL_Y_MOVE, X_MOVE, Y_MOVE};
 use crate::tui::widgets::{
-    CREATE, DEL, EDIT, FILTER_KEYS, FIND, HELP, HelpSection, Modal, QUIT, REFRESH, commit_item,
-    confirm_popup, diff_hscrollbar, diff_scrollbar, file_item, key_footer, list_scrollbar,
-    pane_block, scope_tabs, typed_popup,
+    CREATE, CommitMark, DEL, EDIT, FILTER_KEYS, FIND, HELP, HelpSection, Modal, QUIT, REFRESH,
+    commit_item, confirm_popup, diff_hscrollbar, diff_scrollbar, file_item, key_footer,
+    list_scrollbar, pane_block, scope_tabs, typed_popup,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -90,7 +90,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
 
             let items = commit_items(app, bottom.width);
             let slow = app.cfeed.slow();
-            let bot_title = title(
+            let mut bot_title = title(
                 "commits",
                 None,
                 &app.csel,
@@ -99,6 +99,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
                 edit_bot,
                 true,
             );
+            incoming_note(&mut bot_title, app);
             list(frame, bottom, items, bot_title, true, &mut app.csel);
         }
 
@@ -146,7 +147,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             let scope = (!app.stashes).then_some((labels.as_slice(), app.csel.scope));
             let items = commit_items(app, top.width);
             let slow = app.cfeed.slow();
-            let top_title = title(
+            let mut top_title = title(
                 &commits_label(app),
                 scope,
                 &app.csel,
@@ -155,6 +156,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
                 edit_top,
                 true,
             );
+            incoming_note(&mut top_title, app);
             list(frame, top, items, top_title, true, &mut app.csel);
 
             let items = file_items(app);
@@ -169,7 +171,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             let scope = (!app.stashes).then_some((labels.as_slice(), app.csel.scope));
             let items = commit_items(app, top.width);
             let slow = app.cfeed.slow();
-            let top_title = title(
+            let mut top_title = title(
                 &commits_label(app),
                 scope,
                 &app.csel,
@@ -178,6 +180,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
                 false,
                 false,
             );
+            incoming_note(&mut top_title, app);
             list(frame, top, items, top_title, false, &mut app.csel);
             app.diff_rows = bottom.height.saturating_sub(2).max(1);
             diff(frame, bottom, app);
@@ -380,7 +383,13 @@ const TAGS: HelpSection = (
         ("u", "put back the last delete"),
     ],
 );
-const COMMITS: HelpSection = ("commits", &[("↵", "the selected file's diff")]);
+const COMMITS: HelpSection = (
+    "commits",
+    &[
+        ("↵", "the selected file's diff"),
+        ("", "↑ on no remote yet · ↓ on the upstream, not pulled yet"),
+    ],
+);
 const STASHES: HelpSection = (
     "stashes",
     &[
@@ -542,6 +551,19 @@ fn title(
     spans.extend(sel.query.title_span(pane.sigil(), editing, filterable));
     spans.push(Span::raw(" "));
     Line::from(spans)
+}
+
+/// `↓2 from origin/main` on the commit list's border when a pull would bring
+/// something in, last so it never shifts the tabs along.
+fn incoming_note(title: &mut Line<'static>, app: &App) {
+    if app.incoming.is_empty() {
+        return;
+    }
+    let at = title.spans.len() - 1;
+    let note = format!("   ↓{} from {}", app.incoming.len(), app.upstream);
+    title
+        .spans
+        .insert(at, Span::styled(note, CommitMark::Incoming.style()));
 }
 
 /// A level's scope stops by name, for its tabs.
@@ -963,7 +985,7 @@ fn commit_items(app: &App, width: u16) -> Vec<ListItem<'static>> {
         .iter()
         .map(|&i| {
             let c = &app.commits[i];
-            commit_item(c, app.unpushed.contains(&c.hash), row)
+            commit_item(c, app.mark(c), row)
         })
         .collect()
 }

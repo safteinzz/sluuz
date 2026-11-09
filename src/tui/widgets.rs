@@ -15,20 +15,41 @@ use ratatui::widgets::{
 };
 use std::time::Duration;
 
-/// Render a commit row `width` columns wide. `unpushed` prepends a yellow `↑`
-/// marker (this commit is on no remote yet); pushed commits get an aligning
-/// blank so columns line up. Refs take only what leaves the subject
-/// `MIN_SUBJECT` columns.
-pub fn commit_item(c: &Commit, unpushed: bool, width: usize) -> ListItem<'static> {
-    let mark = if unpushed {
-        Span::styled(
-            "↑ ",
-            Style::default()
+/// Where a commit stands against the remotes, drawn before its hash.
+#[derive(Clone, Copy)]
+pub enum CommitMark {
+    /// On no remote yet: a yellow `↑`.
+    Unpushed,
+    /// Only on the upstream, so a pull would bring it in: a magenta `↓`.
+    Incoming,
+}
+
+impl CommitMark {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            CommitMark::Unpushed => "↑",
+            CommitMark::Incoming => "↓",
+        }
+    }
+
+    /// The mark's colour, which a count of the commits it marks wears too.
+    pub fn style(self) -> Style {
+        match self {
+            CommitMark::Unpushed => Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::raw("  ")
+            CommitMark::Incoming => Style::default().fg(Color::Magenta),
+        }
+    }
+}
+
+/// Render a commit row `width` columns wide, opening on its `mark`, or on an
+/// aligning blank when it has none so columns line up. Refs take only what
+/// leaves the subject `MIN_SUBJECT` columns.
+pub fn commit_item(c: &Commit, mark: Option<CommitMark>, width: usize) -> ListItem<'static> {
+    let mark = match mark {
+        Some(m) => Span::styled(format!("{} ", m.glyph()), m.style()),
+        None => Span::raw("  "),
     };
     let mut spans = vec![
         mark,

@@ -150,7 +150,11 @@ impl App {
             return;
         };
         self.ensure_unpushed();
-        self.log_args = vec![self.branches[i].refname.clone()];
+        let b = &self.branches[i];
+        self.log_args = vec![b.refname.clone()];
+        // Asking the upstream costs two more git calls per branch the cursor
+        // rests on, so only a branch whose row reads behind asks.
+        self.log_branch = b.track.contains("behind").then(|| b.refname.clone());
         self.limit = super::COMMITS_PER_BRANCH;
         self.request_commits();
     }

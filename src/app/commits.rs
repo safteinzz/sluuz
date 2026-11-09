@@ -3,6 +3,7 @@
 
 use super::{App, Level};
 use crate::git::load::{self, Commit, FileEntry};
+use crate::tui::widgets::CommitMark;
 use std::collections::HashSet;
 
 /// Everything about a commit a filter can match: its sha (so a short one is a
@@ -77,8 +78,8 @@ impl App {
     /// Is there anything in this log at all? One commit is enough to answer it,
     /// and a command that would otherwise open an empty screen asks first.
     pub(super) fn has_any_commit(&self) -> bool {
-        let args: Vec<&str> = self.log_args.iter().map(String::as_str).collect();
-        !load::first_commit(&self.repo, &args).is_empty()
+        let branch = self.log_branch.as_deref();
+        !load::first_commit(&self.repo, &self.log_args, branch).is_empty()
     }
 
     /// Start the log for whatever `log_args` currently says: the entry command's
@@ -88,6 +89,8 @@ impl App {
     pub(super) fn request_commits(&mut self) {
         let seq = self.cfeed.issue();
         self.commits.clear();
+        self.incoming.clear();
+        self.upstream.clear();
         self.csel.show(Vec::new());
         let (repo, latest, tx) = (
             self.repo.clone(),
@@ -98,7 +101,28 @@ impl App {
             Some(tag) if self.start == Level::Tags => {
                 load::stream_tag_commits(repo, tag.clone(), self.limit, seq, latest, tx);
             }
-            _ => load::stream_commits(repo, self.log_args.clone(), self.limit, seq, latest, tx),
+            _ => load::stream_commits(
+                repo,
+                self.log_args.clone(),
+                self.log_branch.clone(),
+                self.limit,
+                seq,
+                latest,
+                tx,
+            ),
+        }
+    }
+
+    /// The mark a commit's row opens on. A commit is both unpushed and
+    /// incoming only when the upstream is another local branch, and unpushed
+    /// wins there so the mark agrees with the `local` tab that lists it.
+    pub(super) fn mark(&self, c: &Commit) -> Option<CommitMark> {
+        if self.unpushed.contains(&c.hash) {
+            Some(CommitMark::Unpushed)
+        } else if self.incoming.contains(&c.hash) {
+            Some(CommitMark::Incoming)
+        } else {
+            None
         }
     }
 

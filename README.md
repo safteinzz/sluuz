@@ -72,8 +72,10 @@ refs say it survives on the server too.
 
 ![slu ilog showing a history with a side-by-side diff below it, scrolled and panned](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history.gif)
 
+Legend: `↑` unpushed commits · `↓` unpulled commits, which only the upstream has
+
 ```bash
-slu ilog                     # this branch
+slu ilog                     # this branch, and what a pull would bring in
 slu ilog --all -n 500        # every branch, more history
 slu ilog src/main.rs         # only commits touching that path
 slu trace [-a] [-g] [-n N]   # the aligned log, printed; every branch, with a graph

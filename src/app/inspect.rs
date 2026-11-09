@@ -4,7 +4,7 @@
 
 use super::{App, Branch, Level};
 use crate::git::load::{self, TagState};
-use crate::tui::widgets::Modal;
+use crate::tui::widgets::{CommitMark, Modal};
 
 type Rows = Vec<(String, String)>;
 
@@ -164,14 +164,12 @@ impl App {
         }
         // A stash is never pushed, and saying so on every one says nothing.
         if !self.stashes {
-            rows.push(row(
-                "remote",
-                if self.unpushed.contains(&c.hash) {
-                    "on no remote yet"
-                } else {
-                    "pushed"
-                },
-            ));
+            let remote = match self.mark(c) {
+                Some(CommitMark::Unpushed) => "on no remote yet".to_string(),
+                Some(CommitMark::Incoming) => format!("only on {}, not pulled yet", self.upstream),
+                None => "pushed".to_string(),
+            };
+            rows.push(row("remote", remote));
         }
         rows.push(row("author", d.author.as_str()));
         rows.push(row("date", d.authored.as_str()));

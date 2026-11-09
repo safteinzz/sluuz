@@ -48,6 +48,15 @@ pub enum Batch {
         seq: u64,
         prev: Option<String>,
     },
+    /// What the walked branch's upstream has and the branch does not, which is
+    /// what a pull would bring in. Arrives ahead of those commits, under the
+    /// same `seq`.
+    Incoming {
+        seq: u64,
+        /// `origin/main`.
+        upstream: String,
+        hashes: HashSet<String>,
+    },
     /// `s` or `S` on the repos level has finished: each repo's name and how many
     /// commits it pulled, or what git said. One job runs at a time, so no `seq`.
     Synced {
@@ -246,13 +255,38 @@ pub fn load_unpushed(repo: &str) -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// The newest commit hash this log would produce, or empty when it has none.
-/// One commit is all it takes to tell an empty log from a full one, and it is
-/// the one thing a caller cannot wait for the stream to answer.
-pub fn first_commit(repo: &str, extra: &[&str]) -> String {
-    let mut args = vec!["log", "-n", "1", "--pretty=format:%H"];
-    args.extend_from_slice(extra);
-    git_capture(repo, &args).unwrap_or_default()
+/// The newest commit hash `stream_commits` would produce for the same `args`
+/// and `branch`, or empty when it has none. One commit is all it takes to tell
+/// an empty log from a full one, and it is the one thing a caller cannot wait
+/// for the stream to answer.
+pub fn first_commit(repo: &str, args: &[String], branch: Option<&str>) -> String {
+    let (walk, _) = with_upstream(repo, args, branch);
+    let mut argv = vec!["log", "-n", "1", "--pretty=format:%H"];
+    argv.extend(walk.iter().map(String::as_str));
+    git_capture(repo, &argv).unwrap_or_default()
+}
+
+/// `args` with `branch`'s upstream added to what it walks, and that upstream
+/// as a full ref, None when `branch` tracks nothing or its upstream is gone.
+fn with_upstream(
+    repo: &str,
+    args: &[String],
+    branch: Option<&str>,
+) -> (Vec<String>, Option<String>) {
+    let mut walk = args.to_vec();
+    let Some(branch) = branch else {
+        return (walk, None);
+    };
+    // git reads `refs/heads/x@{upstream}` as a branch called `refs/heads/x`.
+    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    let mark = format!("{short}@{{upstream}}");
+    let upstream = git_capture(repo, &["rev-parse", "--symbolic-full-name", &mark]);
+    if let Some(upstream) = &upstream {
+        // After `--` git reads paths, so the upstream goes in before it.
+        let at = walk.iter().position(|a| a == "--").unwrap_or(walk.len());
+        walk.insert(at, upstream.clone());
+    }
+    (walk, upstream)
 }
 
 /// What a commit row has no room for: both people, its parents, the whole
@@ -555,15 +589,42 @@ fn stream_rows<T, P, W>(
 /// moment `latest` stops naming this request: finishing one nobody will look at
 /// only starves the one they are waiting for, and on a slow filesystem that is
 /// the whole difference.
+///
+/// `branch` (`HEAD` or `refs/heads/<name>`) is a local branch `args` walks: its
+/// upstream is walked with it, and the commits only that upstream has go out
+/// first as `Batch::Incoming`. `args` has to name `branch` itself, because git
+/// walks HEAD only when it is handed no revision at all.
 pub fn stream_commits(
     repo: String,
     args: Vec<String>,
+    branch: Option<String>,
     limit: usize,
     seq: u64,
     latest: Arc<AtomicU64>,
     tx: Sender<Batch>,
 ) {
-    thread::spawn(move || log_rows(&repo, &args, limit, seq, &latest, &tx));
+    thread::spawn(move || {
+        let (walk, upstream) = with_upstream(&repo, &args, branch.as_deref());
+        if let (Some(branch), Some(upstream)) = (&branch, &upstream) {
+            let range = format!("{branch}..{upstream}");
+            let hashes = git_capture(&repo, &["rev-list", &range])
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect();
+            let upstream = upstream
+                .strip_prefix("refs/remotes/")
+                .or_else(|| upstream.strip_prefix("refs/heads/"))
+                .unwrap_or(upstream)
+                .to_string();
+            let _ = tx.send(Batch::Incoming {
+                seq,
+                upstream,
+                hashes,
+            });
+        }
+        log_rows(&repo, &walk, limit, seq, &latest, &tx);
+    });
 }
 
 /// A tag's own commits: what `rev` holds that the tag before it on the same

@@ -35,7 +35,8 @@ Sleep 300ms
 Type "slu ilog"
 Enter
 Sleep 1.5s
-Down 2
+# past the two commits only origin/main has, to the limiter rewrite
+Down 4
 Sleep 1.4s
 Enter
 Sleep 1.5s
