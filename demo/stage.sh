@@ -777,9 +777,11 @@ refuse() { echo "REFUSING to delete $STAGE: $1" >&2; exit 1; }
 # The mount points on $1 or under it, deepest first, one per line. /proc/mounts
 # writes a space, a tab, a newline and a backslash in a path as octal escapes,
 # and each path is compared as plain text, since as a regex any `(` or `.` in
-# the stage's path matched something else or nothing at all.
+# the stage's path matched something else or nothing at all. The path reaches
+# awk through the environment, because `-v` reads its backslashes as escapes.
 mounts_under() {
-  awk -v s="$1" '
+  S="$1" awk '
+    BEGIN { s = ENVIRON["S"] }
     function decode(p,   out, i, c) {
       out = ""
       for (i = 1; i <= length(p); i++) {
