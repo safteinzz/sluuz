@@ -980,18 +980,123 @@ pub fn trunk(repo: &str, remote: &str) -> Option<String> {
         .find(|r| git_capture(repo, &["rev-parse", "--verify", "-q", r]).is_some())
 }
 
-/// Whether every change on `branch` is already in `trunk`: merging it in would
-/// leave trunk's tree exactly as it is. That holds however the work got there,
-/// by merge, squash, rebase or cherry-pick, which counting commits cannot tell,
-/// since the last three give the same changes new ids. A conflict, or a
-/// git older than 2.38 without `merge-tree --write-tree`, reads as not landed,
-/// so the answer only ever errs towards asking for the name.
+/// How many trunk commits `landed` tries behind the tip, which keeps a branch
+/// forked under a busy file from costing seconds for an answer of "ask".
+const LANDING_SPAN: usize = 100;
+
+/// How far back from the branch tip's author date a trunk commit may still
+/// count as made after the work, since the two clocks need not agree.
+const CLOCK_SKEW: i64 = 86_400;
+
+/// Whether every change on `branch` is already in `trunk`: merging it into some
+/// state of trunk leaves that state's tree exactly as it is. That holds however
+/// the work got there, by merge, squash, rebase or cherry-pick, which counting
+/// commits cannot tell, since the last three give the same changes new ids.
+/// The tip is tried first, then, oldest first, the trunk commits made since the
+/// branch was authored (`CLOCK_SKEW` earlier at most) that touch its files, up
+/// to `LANDING_SPAN` of them: a trunk that rewrote a landed line since makes
+/// the merge conflict at the tip while the commit that landed the work still
+/// takes the branch cleanly. Every merge goes through one `merge-tree --stdin`,
+/// and its status is read rather than its tree alone, since a delete against
+/// an edit conflicts yet hands back the trunk's own tree. A conflict at every
+/// state, or a git older than 2.39 without `--stdin`, reads as not landed, so
+/// the answer only ever errs towards asking for the name.
 pub fn landed(repo: &str, branch: &str, trunk: &str) -> bool {
     let tip = format!("refs/heads/{branch}");
-    let merged = git_capture(repo, &["merge-tree", "--write-tree", trunk, &tip]);
-    let tree = format!("{trunk}^{{tree}}");
-    let current = git_capture(repo, &["rev-parse", &tree]);
-    matches!((merged, current), (Some(m), Some(c)) if m.lines().next() == Some(c.as_str()))
+    let range = format!("{trunk}...{tip}");
+    let Some(paths) = git_capture(repo, &["diff", "--name-only", "--no-renames", "-z", &range])
+    else {
+        return false;
+    };
+    let paths: Vec<&str> = paths.split('\0').filter(|p| !p.is_empty()).collect();
+    if paths.is_empty() {
+        return true;
+    }
+    let Some(authored) =
+        git_capture(repo, &["log", "-1", "--format=%at", &tip]).and_then(|t| t.parse::<i64>().ok())
+    else {
+        return false;
+    };
+    let Some(head) = git_capture(repo, &["log", "-1", "--format=%H %T %ct", trunk]) else {
+        return false;
+    };
+    let since = format!("{tip}..{trunk}");
+    let mut args = vec!["log", "--first-parent", "--format=%H %T %ct", &since, "--"];
+    args.extend(paths);
+    let rows = git_capture(repo, &args).unwrap_or_default();
+    let rows: Vec<(&str, i64)> = rows
+        .lines()
+        .filter(|r| *r != head)
+        .filter_map(|r| Some((r, r.rsplit(' ').next()?.parse().ok()?)))
+        .collect();
+    let after = rows.iter().rev().filter(|(_, t)| *t >= authored);
+    let skew = rows
+        .iter()
+        .filter(|(_, t)| *t < authored && *t >= authored - CLOCK_SKEW);
+    let candidates: Vec<&str> = std::iter::once(head.as_str())
+        .chain(after.chain(skew).take(LANDING_SPAN).map(|(r, _)| *r))
+        .collect();
+    let feed: String = candidates
+        .iter()
+        .filter_map(|c| Some(format!("{} {tip}\n", c.split(' ').next()?)))
+        .collect();
+    let Some(out) = merge_tree_batch(repo, &feed) else {
+        return false;
+    };
+    let merges = parse_merge_batch(&out);
+    merges.len() == candidates.len()
+        && merges
+            .iter()
+            .zip(&candidates)
+            .any(|((clean, tree), c)| *clean && c.split(' ').nth(1) == Some(tree))
+}
+
+/// `git merge-tree --write-tree --stdin` over `feed`, one `<commit> <commit>`
+/// per line, which also exits 0 on a conflict; `None` only when git itself
+/// could not run the merges.
+fn merge_tree_batch(repo: &str, feed: &str) -> Option<String> {
+    use std::io::Write;
+    let mut child = Command::new("git")
+        .args([
+            "-C",
+            repo,
+            "merge-tree",
+            "--write-tree",
+            "--no-messages",
+            "--stdin",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(feed.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Each merge of a `--stdin` batch as (clean, tree): a record is its status,
+/// `0` or `1`, then the tree it wrote, then conflict entries and messages
+/// until the NUL that ends it, none of which is a bare `0` or `1`.
+fn parse_merge_batch(out: &str) -> Vec<(bool, &str)> {
+    let fields: Vec<&str> = out.split('\0').collect();
+    let mut merges = Vec::new();
+    let mut i = 0;
+    while i + 1 < fields.len() {
+        let oid = fields[i + 1];
+        if matches!(fields[i], "0" | "1")
+            && oid.len() >= 40
+            && oid.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            merges.push((fields[i] == "1", oid));
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    merges
 }
 
 /// How many of a local branch's commits no remote has: what deleting it would
@@ -1240,6 +1345,44 @@ mod tests {
         assert!(
             !landed(repo.path(), "feature", "main"),
             "a commit main does not have means deleting feature would lose it"
+        );
+    }
+
+    #[test]
+    fn a_rebased_branch_counts_as_landed_after_main_rewrites_its_line() {
+        let repo = TempRepo::new("rebased");
+        repo.commit("app.txt", "one\ntwo\nthree\n", "base");
+        repo.git(&["branch", "-M", "main"]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.commit("app.txt", "one\nfeature\nthree\n", "feature edits two");
+        repo.git(&["checkout", "-q", "main"]);
+        repo.as_author(&["cherry-pick", "feature"]);
+        repo.commit(
+            "app.txt",
+            "one\nrewritten\nthree\n",
+            "main rewrites it again",
+        );
+
+        assert!(
+            landed(repo.path(), "feature", "main"),
+            "main took feature's change under a new id, so the rewrite after it loses nothing"
+        );
+    }
+
+    #[test]
+    fn a_deletion_main_edited_over_is_not_landed() {
+        let repo = TempRepo::new("deleted");
+        repo.commit("gone.txt", "x\n", "base");
+        repo.git(&["branch", "-M", "main"]);
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.git(&["rm", "-q", "gone.txt"]);
+        repo.as_author(&["commit", "-q", "-m", "feature deletes it"]);
+        repo.git(&["checkout", "-q", "main"]);
+        repo.commit("gone.txt", "x\ny\n", "main edits it");
+
+        assert!(
+            !landed(repo.path(), "feature", "main"),
+            "a delete against an edit conflicts yet merges to main's own tree, which must not read as landed"
         );
     }
 
