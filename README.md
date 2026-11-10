@@ -1,7 +1,5 @@
 # sluuz (`slu`)
 
-> **Canonical:** [gitlab.com/safteinzz/sluuz](https://gitlab.com/safteinzz/sluuz) · **Mirror:** [github.com/safteinzz/sluuz](https://github.com/safteinzz/sluuz)
-
 <!-- desc:start -->
 git, but it sleuths - a git superset with cross-repo search, secret scanning, and multi-repo management
 <!-- desc:end -->
@@ -35,7 +33,7 @@ plain command that prints the same answer, for scripts and pipes.
 
 ## Every repo at once, and a way into them
 
-![slu irepos drilling from a repository through its branches and commits into a diff, narrowing each list by typing a filter](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos.gif)
+![slu irepos drilling from a repository through its branches and commits into a diff, narrowing each list by typing a filter](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/repos.gif)
 
 Legend: `✚` uncommitted · `↑` unpushed commits · `↓` unpulled commits
 
@@ -46,14 +44,14 @@ slu repos                # the same list, printed
 slu repos --dirty        # only the ones needing attention
 ```
 
-![slu repos listing six repositories and their state, then only the dirty ones](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/repos-plain.png)
+![slu repos listing six repositories and their state, then only the dirty ones](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/repos-plain.png)
 
 The same app opens at the branches, tags, commits or stashes of the repo you
 are in with `slu ibranch`, `slu itag`, `slu ilog` and `slu istash`.
 
 ## Find a leaked string in every repo's history
 
-![slu iscan searching every repository's history for a password and browsing the hits with the diff of each](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/sleuth.gif)
+![slu iscan searching every repository's history for a password and browsing the hits with the diff of each](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/sleuth.gif)
 
 ```bash
 slu iscan                             # type the terms, browse the hits
@@ -62,7 +60,7 @@ slu scan                              # the usual terms, printed
 slu scan -t "AKIA,BEGIN RSA PRIVATE KEY"
 ```
 
-![slu scan's report over six repositories, ending in a summary of seven hits](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/sleuth-plain.png)
+![slu scan's report over six repositories, ending in a summary of seven hits](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/sleuth-plain.png)
 
 `notifications-worker` is the case a file listing cannot find: `.env` was
 untracked afterwards, so the secret survives only in history, and the `origin/`
@@ -70,7 +68,7 @@ refs say it survives on the server too.
 
 ## Read history in a real diff view
 
-![slu ilog showing a history with a side-by-side diff below it, scrolled and panned](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history.gif)
+![slu ilog showing a history with a side-by-side diff below it, scrolled and panned](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/history.gif)
 
 Legend: `↑` unpushed commits · `↓` unpulled commits, which only the upstream has
 
@@ -81,16 +79,16 @@ slu ilog src/main.rs         # only commits touching that path
 slu trace [-a] [-g] [-n N]   # the aligned log, printed; every branch, with a graph
 ```
 
-![slu ilog with the selected commit's diff side by side below it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/ilog-diff.png)
+![slu ilog with the selected commit's diff side by side below it](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/ilog-diff.png)
 
-![slu trace -a listing every branch's history in aligned columns](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/history-plain.png)
+![slu trace -a listing every branch's history in aligned columns](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/history-plain.png)
 
 Highlighted in pure Rust, so no external diff tool is needed, though `Enter`
 hands the file to yours if you want it.
 
 ## Stage and review in one place
 
-![slu istatus staging and unstaging a file with its diff below, and switching between its tabs](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status.gif)
+![slu istatus staging and unstaging a file with its diff below, and switching between its tabs](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/status.gif)
 
 Legend: left column staged (green) · right column unstaged (red) · `MM` both · `??` untracked
 
@@ -99,7 +97,7 @@ slu istatus              # the two columns, with the diffs
 slu status -sb           # real git, passed straight through
 ```
 
-![slu status -sb and slu log as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/status-plain.png)
+![slu status -sb and slu log as git prints them](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/status-plain.png)
 
 `git status` you can act on, in git's own two-column code: `s` stages, `u`
 unstages, and `S` and `U` do it to every file the list shows. `c` commits
@@ -107,14 +105,14 @@ what is staged, and `d` throws a file's changes away once you type its name.
 
 ## See what a stash holds
 
-![slu istash listing two stashes with the files each one holds, opening their diffs, then asking for a stash's name before dropping it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/stash.gif)
+![slu istash listing two stashes with the files each one holds, opening their diffs, then asking for a stash's name before dropping it](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/stash.gif)
 
 ```bash
 slu istash               # every stash, its files and their diffs
 slu stash list           # real git, passed straight through
 ```
 
-![slu stash list and slu stash show as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/stash-plain.png)
+![slu stash list and slu stash show as git prints them](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/stash-plain.png)
 
 No more `git stash show -p stash@{2}` to find out what you parked. `a` applies,
 `p` pops and `d` drops, asking for the stash's name first, since its changes are
@@ -122,7 +120,7 @@ kept nowhere else.
 
 ## Know what you have not pushed, and delete what is finished
 
-![slu ibranch listing branches with their push state across its tabs, filtering them, asking for an unpushed branch's name before it would delete it, then deleting a finished one](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches.gif)
+![slu ibranch listing branches with their push state across its tabs, filtering them, asking for an unpushed branch's name before it would delete it, then deleting a finished one](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/branches.gif)
 
 Legend: `↑N` ahead of upstream · `no remote` never pushed · `⚑ gone` upstream was deleted · `synced` in step
 
@@ -133,7 +131,7 @@ slu tidy [path] [-a]     # finished branches across every repo, with a delete co
 slu tidy -p              # the same, after dropping remote branches that are gone
 ```
 
-![slu tidy -a reporting the finished branches across six repositories](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/branches-plain.png)
+![slu tidy -a reporting the finished branches across six repositories](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/branches-plain.png)
 
 "Finished" means **upstream gone**, not "merged", so a branch still alive on the
 remote is never suggested, and one holding work the remote does not have is
@@ -141,7 +139,7 @@ listed apart for you to look at.
 
 ## Know which tags the remote has
 
-![slu itag marking three tags against the remote, asking for a pushed one's name before it would delete it everywhere, opening another's commits and a diff, and deleting that one](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/tags.gif)
+![slu itag marking three tags against the remote, asking for a pushed one's name before it would delete it everywhere, opening another's commits and a diff, and deleting that one](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/tags.gif)
 
 Legend: `↑` not pushed · `⚑` the remote's tag is not the same as yours · `↓` only the remote has it
 
@@ -150,7 +148,7 @@ slu itag                 # every tag against the remote, and what went into each
 slu tag -n               # real git, passed straight through
 ```
 
-![slu tag -n as git prints it](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/tags-plain.png)
+![slu tag -n as git prints it](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/tags-plain.png)
 
 git keeps no record of a remote's tags, so `slu itag` asks the remote once the
 list is up and never stops for a password. `t` adds one fetch rule so git keeps
@@ -158,7 +156,7 @@ a copy of them, and the marks then show at once.
 
 ## See where every remote stands
 
-![slu iremote measuring a fork's main against origin and upstream, pushing it to origin, opening upstream's branches and their commits, then adding a remote through a form and removing it behind a gate](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/remote.gif)
+![slu iremote measuring a fork's main against origin and upstream, pushing it to origin, opening upstream's branches and their commits, then adding a remote through a form and removing it behind a gate](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/remote.gif)
 
 Legend: `↑N` commits that remote lacks · `↓N` commits only it has · `·` no local branch tracks it
 
@@ -167,7 +165,7 @@ slu iremote              # every remote against this branch; `p` pushes, `s` syn
 slu branch -vv           # real git, passed straight through
 ```
 
-![slu remote and slu branch -vv as git prints them](https://gitlab.com/safteinzz/sluuz/-/raw/main/readme-assets/remote-plain.png)
+![slu remote and slu branch -vv as git prints them](https://raw.githubusercontent.com/safteinzz/sluuz/main/readme-assets/remote-plain.png)
 
 `p` never forces and sets an upstream only on a branch that has none, so pushing
 a fork's work to `upstream` never changes where it pulls from.
