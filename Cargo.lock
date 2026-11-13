@@ -816,8 +816,10 @@ version = "0.10.8"
 dependencies = [
  "clap",
  "colored",
+ "crossterm_winapi",
  "ratatui",
  "rayon",
+ "rustix 0.38.44",
  "signal-hook",
  "syntect",
  "terminal_size",

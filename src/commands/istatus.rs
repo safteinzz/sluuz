@@ -29,7 +29,8 @@ use crate::tui::widgets::{
     key_footer, list_scrollbar, pane_block, scope_tabs, typed_popup,
 };
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
+    self, clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement,
+    push_keyboard_enhancement,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -280,7 +281,7 @@ pub fn run(_args: Args) {
         dfeed: DiffFeed::default(),
     };
 
-    let mut terminal = ratatui::init();
+    let mut terminal = tui::init();
     app.enhanced = push_keyboard_enhancement();
     app.width = pane_width(&terminal);
     app.reload();
@@ -288,7 +289,7 @@ pub fn run(_args: Args) {
     if app.enhanced {
         pop_keyboard_enhancement();
     }
-    ratatui::restore();
+    tui::restore();
 
     if let Err(e) = result {
         eprintln!("slu istatus: {e}");
@@ -372,8 +373,8 @@ impl App {
         if self.enhanced {
             pop_keyboard_enhancement();
         }
-        ratatui::restore();
-        *terminal = ratatui::init();
+        tui::restore();
+        *terminal = tui::init();
         if self.enhanced {
             push_keyboard_enhancement();
         }

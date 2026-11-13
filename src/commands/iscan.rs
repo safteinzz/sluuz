@@ -29,7 +29,8 @@ use crate::tui::widgets::{
     diff_hscrollbar, diff_scrollbar, key_footer, list_scrollbar, pane_block, scope_tabs,
 };
 use crate::tui::{
-    clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement,
+    self, clamp_hscroll, clamp_scroll, pane_width, pop_keyboard_enhancement,
+    push_keyboard_enhancement,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -165,14 +166,14 @@ pub fn run(args: Args) {
         accel: Accel::default(),
     };
 
-    let mut terminal = ratatui::init();
+    let mut terminal = tui::init();
     app.enhanced = push_keyboard_enhancement();
     app.width = pane_width(&terminal);
     let result = app.event_loop(&mut terminal);
     if app.enhanced {
         pop_keyboard_enhancement();
     }
-    ratatui::restore();
+    tui::restore();
 
     if let Err(e) = result {
         eprintln!("slu iscan: {e}");

@@ -32,7 +32,7 @@ use crate::tui::difffeed::DiffFeed;
 use crate::tui::highlight::RenderedDiff;
 use crate::tui::input::{Accel, stepped};
 use crate::tui::widgets::{CommandLine, Modal, NOTE, Query};
-use crate::tui::{pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
+use crate::tui::{self, pane_width, pop_keyboard_enhancement, push_keyboard_enhancement};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::text::Text;
@@ -551,14 +551,14 @@ impl App {
     /// Set up the terminal, run until the user quits, then put it back exactly
     /// as it was. `cmd` only names the command in an error line.
     pub fn run(mut self, cmd: &str) {
-        let mut terminal = ratatui::init();
+        let mut terminal = tui::init();
         self.enhanced = push_keyboard_enhancement();
         self.width = pane_width(&terminal);
         let result = self.event_loop(&mut terminal);
         if self.enhanced {
             pop_keyboard_enhancement();
         }
-        ratatui::restore();
+        tui::restore();
 
         if let Err(e) = result {
             eprintln!("slu {cmd}: {e}");

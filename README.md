@@ -210,6 +210,7 @@ refs/remote-tags/    git's copy of the remote's tags, kept apart from branches
 - `scan` terms are case-insensitive and default to `password,secret,token,api_key,passwd,credentials`, and being pickaxe-based they also read binary and encrypted blobs.
 - Git marks a branch gone only once its remote-tracking ref is pruned, so on a repo that never prunes `tidy` can miss branches and says so; `tidy -p` or `s` in `ibranch` prunes first, and `git config --global fetch.prune true` fixes it for good.
 - A stash's diff is against the commit it was made on, as `git stash show -p` prints it, and untracked files stashed with `-u` are not listed.
+- In Windows PowerShell 5.1, once the `Microsoft.PowerShell.LocalAccounts` module loads (running `Get-LocalUser` loads it), `slu` is its alias for `Set-LocalUser`: type `slu.exe` there.
 
 ## Compatibility
 

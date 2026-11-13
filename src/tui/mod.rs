@@ -25,10 +25,164 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::crossterm::{ExecutableCommand, execute};
 use std::io::stdout;
-#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(unix)]
 use std::sync::{Arc, OnceLock};
+
+// ── taking the terminal ─────────────────────────────────────────────────────
+
+/// Take the terminal for a TUI as `ratatui::init` does, first putting back the
+/// mode the first `init` found, on a Windows console one crossterm can read
+/// keys in.
+pub fn init() -> DefaultTerminal {
+    #[cfg(unix)]
+    tty::take();
+    #[cfg(windows)]
+    console::take();
+    ratatui::init()
+}
+
+/// Give the terminal back as the first `init` found it.
+pub fn restore() {
+    ratatui::restore();
+    #[cfg(unix)]
+    tty::give_back();
+    #[cfg(windows)]
+    console::give_back();
+}
+
+/// The terminal settings the first `init` found, which every later `init`
+/// starts from and `restore` hands back. crossterm saves whatever settings it
+/// finds each time raw mode goes on, so without this a difftool that turns
+/// echo off, or dies in raw mode, leaves the shell that way once the TUI quits.
+#[cfg(unix)]
+mod tty {
+    use rustix::termios::{OptionalActions, Termios, tcgetattr, tcsetattr};
+    use std::fs::File;
+    use std::sync::OnceLock;
+
+    static FOUND: OnceLock<Termios> = OnceLock::new();
+
+    /// Apply `found` to the terminal crossterm puts in raw mode: `/dev/tty`,
+    /// else stdin.
+    fn set(found: &Termios) {
+        match File::open("/dev/tty") {
+            Ok(tty) => {
+                let _ = tcsetattr(&tty, OptionalActions::Now, found);
+            }
+            Err(_) => {
+                let _ = tcsetattr(std::io::stdin(), OptionalActions::Now, found);
+            }
+        }
+    }
+
+    pub fn take() {
+        match FOUND.get() {
+            Some(found) => set(found),
+            None => {
+                let now = match File::open("/dev/tty") {
+                    Ok(tty) => tcgetattr(&tty),
+                    Err(_) => tcgetattr(std::io::stdin()),
+                };
+                if let Ok(now) = now {
+                    let _ = FOUND.set(now);
+                }
+            }
+        }
+    }
+
+    pub fn give_back() {
+        if let Some(found) = FOUND.get() {
+            set(found);
+        }
+    }
+}
+
+/// The console input mode the first `init` found, which `restore` hands to
+/// whoever gets the terminal next and `init` starts from again, never from what
+/// a child left: a difftool ended by Ctrl-C can leave
+/// `ENABLE_VIRTUAL_TERMINAL_INPUT` on, under which crossterm reads Enter, Esc
+/// and arrows as loose characters.
+#[cfg(windows)]
+mod console {
+    use crossterm_winapi::{ConsoleMode, Handle};
+    use std::sync::{Mutex, OnceLock, PoisonError};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+    const ENABLE_LINE_INPUT: u32 = 0x0002;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
+
+    /// How long the console has to be left alone before `guard` stops
+    /// watching it.
+    const QUIET: Duration = Duration::from_secs(2);
+
+    static FOUND: OnceLock<u32> = OnceLock::new();
+
+    /// The raw mode the TUI holds the console in, `None` while it has handed
+    /// the console over.
+    static HELD: Mutex<Option<u32>> = Mutex::new(None);
+
+    fn input() -> Option<ConsoleMode> {
+        Handle::current_in_handle().ok().map(ConsoleMode::from)
+    }
+
+    pub fn take() {
+        let Some(input) = input() else {
+            return;
+        };
+        let again = FOUND.get().is_some();
+        if !again && let Ok(mode) = input.mode() {
+            let _ = FOUND.set(mode);
+        }
+        let Some(found) = FOUND.get() else {
+            return;
+        };
+        let _ = input.set_mode(found & !ENABLE_VIRTUAL_TERMINAL_INPUT);
+        let raw = found
+            & !(ENABLE_VIRTUAL_TERMINAL_INPUT
+                | ENABLE_PROCESSED_INPUT
+                | ENABLE_LINE_INPUT
+                | ENABLE_ECHO_INPUT);
+        *HELD.lock().unwrap_or_else(PoisonError::into_inner) = Some(raw);
+        if again {
+            thread::spawn(move || guard(raw));
+        }
+    }
+
+    pub fn give_back() {
+        let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+        *held = None;
+        if let (Some(input), Some(found)) = (input(), FOUND.get()) {
+            let _ = input.set_mode(*found);
+        }
+    }
+
+    /// Put `raw` back whenever something else changes the console's mode,
+    /// until it has been left alone for `QUIET` or the TUI hands it over. Git
+    /// for Windows runs a difftool through its MSYS2 shell, which on Ctrl-C
+    /// outlives git and writes back the mode it started with about 50 ms
+    /// after the TUI has taken the console back, turning Ctrl-C into a signal
+    /// again.
+    fn guard(raw: u32) {
+        let Some(input) = input() else {
+            return;
+        };
+        let mut touched = Instant::now();
+        while touched.elapsed() < QUIET {
+            thread::sleep(Duration::from_millis(10));
+            let held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+            if *held != Some(raw) {
+                return;
+            }
+            if input.mode().is_ok_and(|mode| mode != raw) {
+                let _ = input.set_mode(raw);
+                touched = Instant::now();
+            }
+        }
+    }
+}
 
 // ── keyboard enhancement (kitty protocol) ───────────────────────────────────
 
@@ -58,16 +212,15 @@ pub fn suspended<T>(terminal: &mut DefaultTerminal, enhanced: bool, run: impl Fn
     if enhanced {
         pop_keyboard_enhancement();
     }
-    ratatui::restore();
+    restore();
     let out = interrupts_to_child(run);
-    *terminal = ratatui::init();
+    *terminal = init();
     if enhanced {
         push_keyboard_enhancement();
     }
     out
 }
 
-#[cfg(unix)]
 fn interrupts_to_child<T>(run: impl FnOnce() -> T) -> T {
     let ours = interrupts_end_us();
     ours.store(false, Ordering::SeqCst);
@@ -76,28 +229,44 @@ fn interrupts_to_child<T>(run: impl FnOnce() -> T) -> T {
     out
 }
 
-#[cfg(not(unix))]
-fn interrupts_to_child<T>(run: impl FnOnce() -> T) -> T {
-    run()
-}
-
-/// Whether SIGINT and SIGQUIT end the app the way they would with no handler,
+/// Whether the interrupt keys end the app the way they would with no handler,
 /// which `suspended` turns off while a child has the terminal. The handler is
 /// installed once and never removed, because removing one through
-/// signal-hook leaves the signal ignored for the rest of the process. A caught
-/// signal is reset to the default for the child it execs, where an ignored one
-/// would leave it unable to be cancelled.
-#[cfg(unix)]
+/// signal-hook leaves the signal ignored for the rest of the process. It is a
+/// handler, never "ignore": a child inherits an ignored SIGINT, or a console's
+/// Ctrl-C switched off, and could then not be cancelled.
 fn interrupts_end_us() -> &'static Arc<AtomicBool> {
-    use signal_hook::consts::{SIGINT, SIGQUIT};
     static OURS: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     OURS.get_or_init(|| {
         let ours = Arc::new(AtomicBool::new(true));
-        for signal in [SIGINT, SIGQUIT] {
-            let _ = signal_hook::flag::register_conditional_default(signal, ours.clone());
-        }
+        catch_interrupts(&ours);
         ours
     })
+}
+
+/// Ctrl-C and Ctrl-\, as SIGINT and SIGQUIT.
+#[cfg(unix)]
+fn catch_interrupts(ours: &Arc<AtomicBool>) {
+    use signal_hook::consts::{SIGINT, SIGQUIT};
+    for signal in [SIGINT, SIGQUIT] {
+        let _ = signal_hook::flag::register_conditional_default(signal, ours.clone());
+    }
+}
+
+/// Ctrl-C and Ctrl-Break, which the C runtime turns into SIGINT and SIGBREAK.
+/// Ending the app exits with the code Windows' own handler would, since
+/// signal-hook can emulate no default for SIGBREAK.
+#[cfg(windows)]
+fn catch_interrupts(ours: &Arc<AtomicBool>) {
+    use signal_hook::consts::{SIGBREAK, SIGINT};
+    const STATUS_CONTROL_C_EXIT: i32 = 0xC000_013A_u32.cast_signed();
+    for signal in [SIGINT, SIGBREAK] {
+        let _ = signal_hook::flag::register_conditional_shutdown(
+            signal,
+            STATUS_CONTROL_C_EXIT,
+            ours.clone(),
+        );
+    }
 }
 
 // ── terminal geometry ───────────────────────────────────────────────────────

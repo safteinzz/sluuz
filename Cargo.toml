@@ -35,6 +35,10 @@ ratatui       = "0.29"                                    # TUI for `slu ilog` /
 # syntect with the pure-Rust fancy-regex backend (no C/oniguruma) so it builds
 # clean on Windows; used to syntax-highlight diffs in the TUI.
 syntect       = { version = "5", default-features = false, features = ["default-fancy"] }
+signal-hook   = "0.3"                                     # keep Ctrl-C for a program the TUI hands the terminal to
 
 [target.'cfg(unix)'.dependencies]
-signal-hook   = "0.3"                                     # keep Ctrl-C for a program the TUI hands the terminal to
+rustix        = { version = "0.38", features = ["termios"] }   # terminal settings the TUI hands over and takes back
+
+[target.'cfg(windows)'.dependencies]
+crossterm_winapi = "0.9"                                  # console input mode the TUI hands over and takes back
